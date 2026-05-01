@@ -53,6 +53,20 @@ ${JSON.stringify(items)}
 
 Create 3 complete, cohesive outfit looks. Return ONLY a JSON array — no markdown, no explanation.
 
+CRITICAL: Every look MUST have EXACTLY 4 slots. No more, no less. A look with 3 slots is invalid.
+
+Standard look (use when no dress):
+  slot 1 label: "Top"      — pick from category: tops
+  slot 2 label: "Bottom"   — pick from category: bottoms
+  slot 3 label: "Shoes"    — pick from category: shoes  ← REQUIRED in every look
+  slot 4 label: "Layer"    — pick from category: outerwear OR accessories
+
+Dress look (use when featuring a dress):
+  slot 1 label: "Dress"      — pick from category: dresses
+  slot 2 label: "Shoes"      — pick from category: shoes  ← REQUIRED in every look
+  slot 3 label: "Layer"      — pick from category: outerwear
+  slot 4 label: "Accessory"  — pick from category: accessories
+
 [
   {
     "name": "short evocative look name (2–3 words)",
@@ -72,9 +86,10 @@ Create 3 complete, cohesive outfit looks. Return ONLY a JSON array — no markdo
 
 Rules:
 - Every item_id must be a real uuid from the list I gave you
+- Every look must have EXACTLY 4 slots — if you cannot find 4 valid items, still return 4 slots using the best available items
 - No item_id may appear twice across all 3 looks
-- Look 1 is your top recommendation for today
-- For a dress look use labels: "Dress", "Shoes", "Layer", "Accessory"`;
+- Shoes (category: shoes) must appear in every look — do not omit them
+- Look 1 is your top recommendation for today`;
 
 // ── types & helpers ───────────────────────────────────────────────────────────
 
@@ -222,6 +237,32 @@ export async function GET() {
           slot: s.label,
           items: [toSlotItem(row, s.label), ...alts.map((a) => toSlotItem(a, s.label))],
         });
+      }
+
+      // Pad to 4 slots if Claude returned fewer (shouldn't happen with new prompt, but be safe)
+      const FALLBACK_LABELS = ["Top", "Bottom", "Shoes", "Layer"];
+      if (slots.length > 0 && slots.length < 4) {
+        const usedLabels = new Set(slots.map((s) => s.slot));
+        const missingLabels = FALLBACK_LABELS.filter((l) => !usedLabels.has(l));
+        for (const label of missingLabels) {
+          // Find the category that maps to this label
+          const catMap: Record<string, string> = {
+            Top: "tops", Bottom: "bottoms", Shoes: "shoes", Layer: "outerwear",
+            Dress: "dresses", Accessory: "accessories",
+          };
+          const cat = catMap[label];
+          if (!cat) continue;
+          const fallback = allItems.find((r) => r.category === cat && !usedIds.has(r.id));
+          if (!fallback) continue;
+          usedIds.add(fallback.id);
+          const alts = pickAlts(fallback.category, usedIds, allItems, 2);
+          alts.forEach((a) => usedIds.add(a.id));
+          slots.push({
+            slot: label,
+            items: [toSlotItem(fallback, label), ...alts.map((a) => toSlotItem(a, label))],
+          });
+          if (slots.length === 4) break;
+        }
       }
 
       if (slots.length < 3) continue;
