@@ -229,6 +229,9 @@ export default function SwipePage() {
   const [cardDx, setCardDx] = useState(0);
   const [isDraggingCard, setIsDraggingCard] = useState(false);
   const [cardExiting, setCardExiting] = useState<Decision | null>(null);
+  // True for one frame when a new card snaps in — disables CSS transition so it
+  // doesn't sweep from the previous exit position (e.g. -130%/-14deg → 0)
+  const [isSnapping, setIsSnapping] = useState(false);
 
   const cardStartX = useRef(0);
   const cardLiveX = useRef(0);
@@ -272,8 +275,6 @@ export default function SwipePage() {
       setTimeout(() => {
         const next = { ...decisions, [currentIndex]: decision };
         setDecisions(next);
-        setCardExiting(null);
-        setCardDx(0);
 
         if (currentIndex >= looks.length - 1) {
           // all done — navigate to confirm with the worn look's id
@@ -283,7 +284,12 @@ export default function SwipePage() {
           if (wornLook) cacheWornLook(wornLook);
           router.push(`/confirm?look=${wornIdx}`);
         } else {
+          // Snap the card to position 0 with no transition, then re-enable
+          setIsSnapping(true);
+          setCardExiting(null);
+          setCardDx(0);
           setCurrentIndex((i) => i + 1);
+          requestAnimationFrame(() => requestAnimationFrame(() => setIsSnapping(false)));
         }
       }, 300);
     },
@@ -452,7 +458,7 @@ export default function SwipePage() {
             transform: cardExiting
               ? `translateX(${cardExiting === "wear" ? "130%" : "-130%"}) rotate(${cardExiting === "wear" ? 14 : -14}deg)`
               : `translateX(${cardDx}px) rotate(${rotation}deg)`,
-            transition: isDraggingCard ? "none" : "transform 0.3s cubic-bezier(0.22,1,0.36,1)",
+            transition: (isDraggingCard || isSnapping) ? "none" : "transform 0.3s cubic-bezier(0.22,1,0.36,1)",
             display: "flex", flexDirection: "column",
           }}
         >
