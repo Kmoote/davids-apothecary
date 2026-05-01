@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { DALogo } from "@/components/DALogo";
 import { DavidBubble } from "@/components/DavidBubble";
+import { PLACEHOLDER_LOOKS } from "@/lib/placeholder-looks";
 
 function useDayGreeting() {
   const [label, setLabel] = useState("");
@@ -20,11 +21,6 @@ function useDayGreeting() {
   return label;
 }
 
-const PLACEHOLDER_LOOKS = [
-  { id: 0, name: "The Edit",   tag: "Polished",  colors: ["#2a3a54", "#ede9e0", "#cec5b0", "#9a7044"] },
-  { id: 1, name: "Easy Day",   tag: "Relaxed",   colors: ["#cfc5a0", "#e8e4dc", "#242020", "#c8a87e"] },
-  { id: 2, name: "Sharp",      tag: "Powerful",  colors: ["#2a3a54", "#ede9e0", "#48485a", "#1c1c22"] },
-];
 
 function LookCard({ look, isFirst }: { look: typeof PLACEHOLDER_LOOKS[0]; isFirst: boolean }) {
   return (
