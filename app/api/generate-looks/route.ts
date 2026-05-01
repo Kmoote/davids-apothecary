@@ -10,6 +10,27 @@ const supabase  = createClient(
 );
 const CATHERINE_USER_ID = "00000000-0000-0000-0000-000000000001";
 
+// ── season helper ─────────────────────────────────────────────────────────────
+
+function getCurrentSeason(): "spring" | "summer" | "fall" | "winter" {
+  const m = new Date().getMonth(); // 0 = Jan
+  if (m >= 2 && m <= 4) return "spring";
+  if (m >= 5 && m <= 7) return "summer";
+  if (m >= 8 && m <= 10) return "fall";
+  return "winter";
+}
+
+// How many candidates per category to send Claude.
+// This pool stays roughly constant no matter how big the wardrobe grows.
+const CATEGORY_LIMITS: Record<string, number> = {
+  tops:        8,
+  bottoms:     8,
+  outerwear:   8,
+  shoes:       6,
+  dresses:     5,
+  accessories: 4,
+};
+
 // ── David's persona ───────────────────────────────────────────────────────────
 
 const DAVID_SYSTEM = `You are David, a refined personal stylist with impeccable, eclectic taste. You know Catherine's wardrobe intimately — she has a bold, confident style that mixes textures, prints, and unexpected combinations with ease.
@@ -26,10 +47,11 @@ You'll build exactly 3 outfit looks. Each has 4 slots. Favour these slot combos:
   • dress + shoes + layer + accessory (for dress days)
 Never repeat the same item across looks. Make each look feel like a distinct mood.`;
 
-const buildPrompt = (items: object[]) => `Here is Catherine's wardrobe (${items.length} pieces):
+const buildPrompt = (items: object[], season: string) =>
+  `It's ${season}. Here are Catherine's most-available pieces for today (${items.length} items — pre-filtered by season and recency):
 ${JSON.stringify(items)}
 
-Create 3 complete, cohesive outfit looks for today. Return ONLY a JSON array — no markdown, no explanation.
+Create 3 complete, cohesive outfit looks. Return ONLY a JSON array — no markdown, no explanation.
 
 [
   {
@@ -54,7 +76,7 @@ Rules:
 - Look 1 is your top recommendation for today
 - For a dress look use labels: "Dress", "Shoes", "Layer", "Accessory"`;
 
-// ── helpers ───────────────────────────────────────────────────────────────────
+// ── types & helpers ───────────────────────────────────────────────────────────
 
 type WardrobeRow = {
   id: string; name: string | null; category: string;
@@ -62,15 +84,49 @@ type WardrobeRow = {
   subcategory: string | null; occasion_tags: string[];
   formality: number; season_fit: string[];
   pattern: string | null; fabric: string | null;
+  last_worn_at: string | null;
 };
 
-/** Pick up to `n` alternatives for a slot: same category, not already used in any look. */
+/**
+ * Build the candidate pool Claude reasons over.
+ * - Season-appropriate items come first (empty season_fit = all-season, always included)
+ * - Within each category, sorted by least-recently-worn (nulls = never worn = top priority)
+ * - Capped per category so total stays ~35–40 items regardless of wardrobe size
+ * - Falls back to off-season items if a category is short on season-appropriate pieces
+ */
+function buildCandidatePool(all: WardrobeRow[], season: string): WardrobeRow[] {
+  const candidates: WardrobeRow[] = [];
+
+  for (const [cat, limit] of Object.entries(CATEGORY_LIMITS)) {
+    const inCat = all.filter((r) => r.category === cat);
+
+    // Sort: never worn first, then least-recently-worn
+    inCat.sort((a, b) => {
+      if (!a.last_worn_at && !b.last_worn_at) return 0;
+      if (!a.last_worn_at) return -1;
+      if (!b.last_worn_at) return 1;
+      return new Date(a.last_worn_at).getTime() - new Date(b.last_worn_at).getTime();
+    });
+
+    // Prefer season-fit items; fall through to off-season if not enough
+    const seasonFit  = inCat.filter((r) => r.season_fit.length === 0 || r.season_fit.includes(season));
+    const offSeason  = inCat.filter((r) => r.season_fit.length > 0 && !r.season_fit.includes(season));
+    const ordered    = [...seasonFit, ...offSeason];
+
+    candidates.push(...ordered.slice(0, limit));
+  }
+
+  return candidates;
+}
+
+/** Pick up to `n` alternatives: same category, not already reserved. */
 function pickAlts(
   category: string,
   exclude: Set<string>,
   all: WardrobeRow[],
   n = 2
 ): WardrobeRow[] {
+  // Pull from the full wardrobe (not just candidates) for richer swap options
   return all
     .filter((r) => r.category === category && !exclude.has(r.id))
     .slice(0, n);
@@ -79,12 +135,12 @@ function pickAlts(
 function toSlotItem(row: WardrobeRow, slot: string): RealSlotItem {
   return {
     slot,
-    item_id: row.id,
-    name: row.name ?? row.category,
-    category: row.category,
-    photo_url: row.photo_url,
+    item_id:      row.id,
+    name:         row.name ?? row.category,
+    category:     row.category,
+    photo_url:    row.photo_url,
     thumbnail_url: row.thumbnail_url ?? null,
-    colors: row.colors,
+    colors:       row.colors,
   };
 }
 
@@ -92,40 +148,46 @@ function toSlotItem(row: WardrobeRow, slot: string): RealSlotItem {
 
 export async function GET() {
   try {
-    // 1. fetch wardrobe
+    const season = getCurrentSeason();
+
+    // 1. Fetch full wardrobe ordered by least-recently-worn.
+    //    The order here feeds both the candidate filter AND the alt pool.
     const { data: rows, error: dbErr } = await supabase
       .from("wardrobe_items")
-      .select("id,name,category,subcategory,photo_url,thumbnail_url,colors,occasion_tags,formality,season_fit,pattern,fabric")
+      .select("id,name,category,subcategory,photo_url,thumbnail_url,colors,occasion_tags,formality,season_fit,pattern,fabric,last_worn_at")
       .eq("user_id", CATHERINE_USER_ID)
       .eq("is_active", true)
-      .order("category");
+      .order("last_worn_at", { ascending: true, nullsFirst: true });
 
     if (dbErr) throw new Error(`DB: ${dbErr.message}`);
-    const items = (rows ?? []) as WardrobeRow[];
-    if (items.length < 12) {
+    const allItems = (rows ?? []) as WardrobeRow[];
+    if (allItems.length < 12) {
       return NextResponse.json({ error: "Not enough wardrobe items yet" }, { status: 422 });
     }
 
-    // 2. build condensed list for Claude (no photo URLs to save tokens)
-    const condensed = items.map((r) => ({
-      id: r.id,
-      name: r.name ?? r.category,
-      category: r.category,
-      subcategory: r.subcategory,
-      colors: r.colors,
+    // 2. Build the ~35–40 item candidate pool (constant size as wardrobe grows)
+    const candidates = buildCandidatePool(allItems, season);
+
+    // 3. Condensed payload for Claude — metadata only, no photo URLs
+    const condensed = candidates.map((r) => ({
+      id:           r.id,
+      name:         r.name ?? r.category,
+      category:     r.category,
+      subcategory:  r.subcategory,
+      colors:       r.colors,
       occasion_tags: r.occasion_tags,
-      formality: r.formality,
-      season_fit: r.season_fit,
-      pattern: r.pattern,
-      fabric: r.fabric,
+      formality:    r.formality,
+      season_fit:   r.season_fit,
+      pattern:      r.pattern,
+      fabric:       r.fabric,
     }));
 
-    // 3. call Claude
+    // 4. Call Claude with the focused candidate pool
     const msg = await anthropic.messages.create({
       model: "claude-haiku-4-5-20251001",
       max_tokens: 1200,
       system: DAVID_SYSTEM,
-      messages: [{ role: "user", content: buildPrompt(condensed) }],
+      messages: [{ role: "user", content: buildPrompt(condensed, season) }],
     });
 
     const rawText = msg.content[0].type === "text" ? msg.content[0].text : "[]";
@@ -137,42 +199,37 @@ export async function GET() {
       slots: Array<{ label: string; item_id: string }>;
     }>;
 
-    // 4. resolve items + build alternatives
-    const itemMap = new Map(items.map((r) => [r.id, r]));
-    const usedIds = new Set<string>();
-
+    // 5. Resolve items + build alternatives (alts drawn from full wardrobe, not just candidates)
+    const candidateMap = new Map(candidates.map((r) => [r.id, r]));
+    const usedIds      = new Set<string>();
     const resolvedLooks: Omit<RealLook, "look_id">[] = [];
 
     for (const cl of claudeLooks.slice(0, 3)) {
       const slots: RealLookSlot[] = [];
-      const lookUsed = new Set<string>();
 
       for (const s of (cl.slots ?? []).slice(0, 4)) {
-        const row = itemMap.get(s.item_id);
-        if (!row) continue; // skip if Claude hallucinated an ID
-        if (usedIds.has(row.id)) continue; // skip cross-look duplicates
+        const row = candidateMap.get(s.item_id);
+        if (!row)          continue; // Claude hallucinated an ID
+        if (usedIds.has(row.id)) continue; // cross-look duplicate
 
         usedIds.add(row.id);
-        lookUsed.add(row.id);
 
-        const alts = pickAlts(row.category, usedIds, items, 2);
-        alts.forEach((a) => usedIds.add(a.id)); // reserve alts from other looks
+        // Alts come from the full wardrobe so swapping isn't limited to candidates
+        const alts = pickAlts(row.category, usedIds, allItems, 2);
+        alts.forEach((a) => usedIds.add(a.id));
 
         slots.push({
           slot: s.label,
-          items: [
-            toSlotItem(row, s.label),
-            ...alts.map((a) => toSlotItem(a, s.label)),
-          ],
+          items: [toSlotItem(row, s.label), ...alts.map((a) => toSlotItem(a, s.label))],
         });
       }
 
-      if (slots.length < 3) continue; // skip degenerate looks
+      if (slots.length < 3) continue;
 
       resolvedLooks.push({
-        name: cl.name ?? "The Edit",
-        tag: cl.tag ?? "Casual Cool",
-        david_note: cl.david_note ?? "",
+        name:         cl.name ?? "The Edit",
+        tag:          cl.tag  ?? "Casual Cool",
+        david_note:   cl.david_note   ?? "",
         closing_line: cl.closing_line ?? "",
         slots,
       });
@@ -180,7 +237,7 @@ export async function GET() {
 
     if (resolvedLooks.length === 0) throw new Error("Could not resolve any looks");
 
-    // 5. persist look rows to DB (so wear triggers work)
+    // 6. Persist look rows so the wear trigger can update wear_count
     const finalLooks: RealLook[] = [];
 
     for (const look of resolvedLooks) {
@@ -188,12 +245,12 @@ export async function GET() {
       const { data: inserted, error: insErr } = await supabase
         .from("looks")
         .insert({
-          user_id: CATHERINE_USER_ID,
-          name: look.name,
-          theme: look.tag,
-          item_ids: itemIds,
-          occasion: look.tag,
-          stylist_raw: { david_note: look.david_note, closing_line: look.closing_line },
+          user_id:     CATHERINE_USER_ID,
+          name:        look.name,
+          theme:       look.tag,
+          item_ids:    itemIds,
+          occasion:    look.tag,
+          stylist_raw: { david_note: look.david_note, closing_line: look.closing_line, season },
         })
         .select("id")
         .single();
@@ -202,7 +259,7 @@ export async function GET() {
       finalLooks.push({ ...look, look_id: inserted.id });
     }
 
-    return NextResponse.json({ looks: finalLooks });
+    return NextResponse.json({ looks: finalLooks, meta: { season, candidates: candidates.length } });
 
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
