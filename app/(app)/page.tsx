@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { DALogo } from "@/components/DALogo";
 import { DavidBubble } from "@/components/DavidBubble";
-import { PLACEHOLDER_LOOKS } from "@/lib/placeholder-looks";
+import { PLACEHOLDER_LOOKS, resolveItems } from "@/lib/placeholder-looks";
 
 function useDayGreeting() {
   const [label, setLabel] = useState("");
@@ -38,11 +38,11 @@ function LookCard({ look, isFirst }: { look: typeof PLACEHOLDER_LOOKS[0]; isFirs
     >
       {/* flat-lay placeholder */}
       <div style={{ height: 112, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 3, padding: 6 }}>
-        {look.colors.map((c, i) => (
+        {resolveItems(look, {}).map((item, i) => (
           <div
             key={i}
             className="texture relative"
-            style={{ background: c, borderRadius: 6 }}
+            style={{ background: item.color, borderRadius: 6 }}
           />
         ))}
       </div>

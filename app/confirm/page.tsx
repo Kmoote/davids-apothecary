@@ -2,7 +2,7 @@
 
 import { Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
-import { PLACEHOLDER_LOOKS } from "@/lib/placeholder-looks";
+import { PLACEHOLDER_LOOKS, resolveItems } from "@/lib/placeholder-looks";
 import { DALogo } from "@/components/DALogo";
 import { DavidAvatar } from "@/components/DavidBubble";
 
@@ -11,6 +11,7 @@ function ConfirmInner() {
   const router = useRouter();
   const lookId = Number(params.get("look") ?? 0);
   const look = PLACEHOLDER_LOOKS[lookId] ?? PLACEHOLDER_LOOKS[0];
+  const items = resolveItems(look, {});
 
   return (
     <div
@@ -80,11 +81,11 @@ function ConfirmInner() {
             height: "100%",
           }}
         >
-          {look.colors.map((c, i) => (
+          {items.map((item, i) => (
             <div
               key={i}
               className="texture relative"
-              style={{ background: c, borderRadius: 10 }}
+              style={{ background: item.color, borderRadius: 10 }}
             />
           ))}
         </div>
@@ -95,9 +96,9 @@ function ConfirmInner() {
         className="fade-up flex flex-wrap justify-center gap-2"
         style={{ animationDelay: "320ms", padding: "0 24px" }}
       >
-        {look.pieces.map((piece) => (
+        {items.map((item) => (
           <span
-            key={piece}
+            key={item.name}
             style={{
               fontFamily: "var(--font-jost), sans-serif",
               fontSize: 11,
@@ -109,7 +110,7 @@ function ConfirmInner() {
               color: "#2a2520",
             }}
           >
-            {piece}
+            {item.name}
           </span>
         ))}
       </div>
