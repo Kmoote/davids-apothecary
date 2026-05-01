@@ -2,9 +2,9 @@
   command = "npm run build"
   publish = ".next"
 
-# Public env vars - safe to commit (baked into client bundle by Next.js).
+# Public env vars — safe to commit (baked into client bundle by Next.js anyway).
 # Private vars (SUPABASE_SERVICE_ROLE_KEY, ANTHROPIC_API_KEY) must be set
-# in Netlify dashboard: Site settings > Environment variables.
+# in the Netlify dashboard → Site settings → Environment variables.
 [build.environment]
   NEXT_PUBLIC_SUPABASE_URL = "https://gnchysgmgubiweartwfj.supabase.co"
   NEXT_PUBLIC_SUPABASE_ANON_KEY = "sb_publishable_c5eBVLJ0axKVaIB8t0X3-w_1gtQJOdh"
