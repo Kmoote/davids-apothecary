@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { supabase, CATHERINE_USER_ID } from "@/lib/supabase";
 
 type WardrobeItem = {
@@ -114,11 +115,23 @@ export default function WardrobePage() {
         >
           Your Wardrobe
         </p>
-        <p
-          style={{ fontFamily: "var(--font-playfair), serif", fontStyle: "italic", fontWeight: 700, fontSize: 22, color: "#faf7f2" }}
-        >
-          {loading ? "—" : `${items.length} piece${items.length !== 1 ? "s" : ""}`}
-        </p>
+        <div className="flex items-end justify-between">
+          <p style={{ fontFamily: "var(--font-playfair), serif", fontStyle: "italic", fontWeight: 700, fontSize: 22, color: "#faf7f2" }}>
+            {loading ? "—" : `${items.length} piece${items.length !== 1 ? "s" : ""}`}
+          </p>
+          <Link
+            href="/upload"
+            style={{
+              fontFamily: "var(--font-jost), sans-serif",
+              fontSize: 11, fontWeight: 600, color: "#c4a882",
+              border: "1px solid rgba(196,168,130,0.4)",
+              borderRadius: 20, padding: "5px 12px",
+              textDecoration: "none", letterSpacing: "0.04em",
+            }}
+          >
+            + Add piece
+          </Link>
+        </div>
       </div>
 
       {/* category filter pills */}
