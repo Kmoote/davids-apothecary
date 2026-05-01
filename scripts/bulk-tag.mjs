@@ -12,11 +12,13 @@
  */
 
 import { readFileSync } from "fs";
+import { fileURLToPath } from "url";
 import { createClient } from "@supabase/supabase-js";
 import Anthropic from "@anthropic-ai/sdk";
+import sharp from "sharp";
 
 // ── load .env.local ───────────────────────────────────────────────────────────
-const envPath = new URL("../.env.local", import.meta.url).pathname;
+const envPath = fileURLToPath(new URL("../.env.local", import.meta.url));
 const env = Object.fromEntries(
   readFileSync(envPath, "utf8")
     .split("\n")
@@ -78,17 +80,19 @@ async function listAllFiles(prefix = "") {
   return files.filter((f) => /\.(jpe?g|png|webp|heic)$/i.test(f));
 }
 
-/** Fetch image from public URL and return base64 + mediaType. */
+/** Fetch image from public URL, resize to ≤1500px, return base64 + mediaType. */
 async function fetchBase64(publicUrl) {
   const res = await fetch(publicUrl);
   if (!res.ok) throw new Error(`HTTP ${res.status} fetching ${publicUrl}`);
-  const buf = Buffer.from(await res.arrayBuffer());
-  const ct = res.headers.get("content-type") ?? "image/jpeg";
-  const mediaType =
-    ct.includes("png") ? "image/png"
-    : ct.includes("webp") ? "image/webp"
-    : "image/jpeg";
-  return { base64: buf.toString("base64"), mediaType };
+  const rawBuf = Buffer.from(await res.arrayBuffer());
+
+  // Resize using sharp — keeps iPhone photos well under the 5 MB Claude limit
+  const resized = await sharp(rawBuf)
+    .resize(1500, 1500, { fit: "inside", withoutEnlargement: true })
+    .jpeg({ quality: 85 })
+    .toBuffer();
+
+  return { base64: resized.toString("base64"), mediaType: "image/jpeg" };
 }
 
 /** Call Claude Haiku vision and parse the tag JSON. */

@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { DALogo } from "@/components/DALogo";
 import { DavidBubble } from "@/components/DavidBubble";
-import { PLACEHOLDER_LOOKS, resolveItems } from "@/lib/placeholder-looks";
+import { type RealLook, getCachedLooks, cacheLooks } from "@/lib/looks";
 
 function useDayGreeting() {
   const [label, setLabel] = useState("");
@@ -21,57 +21,60 @@ function useDayGreeting() {
   return label;
 }
 
+// ── look card ─────────────────────────────────────────────────────────────────
 
-function LookCard({ look, isFirst }: { look: typeof PLACEHOLDER_LOOKS[0]; isFirst: boolean }) {
+function LookCard({ look, isFirst }: { look: RealLook; isFirst: boolean }) {
   return (
     <Link
       href="/swipe"
       className="shrink-0 flex flex-col"
       style={{
-        width: 102,
-        borderRadius: 12,
+        width: 102, borderRadius: 12,
         border: isFirst ? "1.5px solid #c4a882" : "1px solid rgba(42,37,32,0.14)",
         background: "#f5f0e8",
         boxShadow: isFirst ? "0 4px 16px rgba(196,168,130,0.28)" : "none",
         overflow: "hidden",
       }}
     >
-      {/* flat-lay placeholder */}
+      {/* 2×2 photo grid */}
       <div style={{ height: 112, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 3, padding: 6 }}>
-        {resolveItems(look, {}).map((item, i) => (
-          <div
-            key={i}
-            className="texture relative"
-            style={{ background: item.color, borderRadius: 6 }}
-          />
-        ))}
+        {look.slots.slice(0, 4).map((slot, i) => {
+          const item = slot.items[0];
+          return (
+            <div
+              key={i}
+              className="texture relative"
+              style={{ background: item?.colors[0] ?? "#cec5b0", borderRadius: 6, overflow: "hidden" }}
+            >
+              {item && (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={item.thumbnail_url ?? item.photo_url}
+                  alt={item.name}
+                  draggable={false}
+                  className="absolute inset-0 w-full h-full object-cover"
+                  style={{ pointerEvents: "none" }}
+                />
+              )}
+            </div>
+          );
+        })}
       </div>
+
       {/* label */}
       <div style={{ padding: "6px 8px 8px" }}>
-        <span
-          style={{
-            display: "block",
-            fontSize: 9,
-            color: "#c4a882",
-            fontFamily: "var(--font-jost), sans-serif",
-            fontWeight: 600,
-            letterSpacing: "0.08em",
-            textTransform: "uppercase",
-            marginBottom: 2,
-          }}
-        >
+        <span style={{
+          display: "block", fontSize: 9, color: "#c4a882",
+          fontFamily: "var(--font-jost), sans-serif", fontWeight: 600,
+          letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 2,
+        }}>
           {look.tag}
         </span>
-        <span
-          style={{
-            display: "block",
-            fontSize: 12,
-            fontFamily: "var(--font-playfair), serif",
-            fontStyle: "italic",
-            fontWeight: 700,
-            color: "#2a2520",
-          }}
-        >
+        <span style={{
+          display: "block", fontSize: 12,
+          fontFamily: "var(--font-playfair), serif", fontStyle: "italic",
+          fontWeight: 700, color: "#2a2520",
+        }}>
           {look.name}
         </span>
       </div>
@@ -79,8 +82,53 @@ function LookCard({ look, isFirst }: { look: typeof PLACEHOLDER_LOOKS[0]; isFirs
   );
 }
 
+// ── skeleton card ─────────────────────────────────────────────────────────────
+
+function SkeletonCard({ isFirst }: { isFirst: boolean }) {
+  return (
+    <div
+      className="shrink-0 flex flex-col"
+      style={{
+        width: 102, borderRadius: 12,
+        border: isFirst ? "1.5px solid rgba(196,168,130,0.35)" : "1px solid rgba(42,37,32,0.10)",
+        background: "#f5f0e8", overflow: "hidden",
+      }}
+    >
+      <div style={{ height: 112, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 3, padding: 6 }}>
+        {[0, 1, 2, 3].map((i) => (
+          <div key={i} style={{ borderRadius: 6, background: "rgba(42,37,32,0.07)" }} />
+        ))}
+      </div>
+      <div style={{ padding: "6px 8px 8px" }}>
+        <div style={{ height: 8, borderRadius: 4, background: "rgba(42,37,32,0.07)", marginBottom: 5, width: "60%" }} />
+        <div style={{ height: 10, borderRadius: 4, background: "rgba(42,37,32,0.09)", width: "80%" }} />
+      </div>
+    </div>
+  );
+}
+
+// ── page ──────────────────────────────────────────────────────────────────────
+
 export default function MorningPage() {
   const dayLabel = useDayGreeting();
+  const [looks, setLooks] = useState<RealLook[] | null>(null);
+
+  useEffect(() => {
+    const cached = getCachedLooks();
+    if (cached) { setLooks(cached); return; }
+
+    fetch("/api/generate-looks")
+      .then((r) => r.json())
+      .then((json) => {
+        if (!json.error) {
+          cacheLooks(json.looks);
+          setLooks(json.looks);
+        }
+      })
+      .catch(() => {/* silent fail — skeleton stays */});
+  }, []);
+
+  const firstLook = looks?.[0];
 
   return (
     <div className="flex flex-col h-full bg-cream overflow-hidden">
@@ -91,15 +139,7 @@ export default function MorningPage() {
       >
         <DALogo size={54} dark />
         <div>
-          <p
-            style={{
-              fontFamily: "var(--font-jost), sans-serif",
-              fontSize: 10,
-              color: "#c4a882",
-              letterSpacing: "0.1em",
-              fontWeight: 500,
-            }}
-          >
+          <p style={{ fontFamily: "var(--font-jost), sans-serif", fontSize: 10, color: "#c4a882", letterSpacing: "0.1em", fontWeight: 500 }}>
             {dayLabel}
           </p>
           <div className="flex items-center gap-2 mt-1">
@@ -119,23 +159,17 @@ export default function MorningPage() {
 
         {/* look carousel */}
         <div>
-          <p
-            style={{
-              fontFamily: "var(--font-jost), sans-serif",
-              fontSize: 9,
-              color: "#8a7a6a",
-              letterSpacing: "0.1em",
-              fontWeight: 500,
-              textTransform: "uppercase",
-              marginBottom: 10,
-            }}
-          >
+          <p style={{
+            fontFamily: "var(--font-jost), sans-serif", fontSize: 9, color: "#8a7a6a",
+            letterSpacing: "0.1em", fontWeight: 500, textTransform: "uppercase", marginBottom: 10,
+          }}>
             Today&apos;s Edits
           </p>
           <div className="flex gap-3 overflow-x-auto no-scrollbar pb-1">
-            {PLACEHOLDER_LOOKS.map((look, i) => (
-              <LookCard key={look.id} look={look} isFirst={i === 0} />
-            ))}
+            {looks
+              ? looks.map((look, i) => <LookCard key={look.look_id} look={look} isFirst={i === 0} />)
+              : [0, 1, 2].map((i) => <SkeletonCard key={i} isFirst={i === 0} />)
+            }
           </div>
         </div>
 
@@ -144,18 +178,13 @@ export default function MorningPage() {
           href="/swipe"
           className="fade-up flex items-center justify-center gap-2"
           style={{
-            animationDelay: "220ms",
-            background: "#2a2520",
-            color: "#faf7f2",
-            borderRadius: 12,
-            padding: "14px 18px",
-            fontFamily: "var(--font-jost), sans-serif",
-            fontSize: 14,
-            fontWeight: 600,
+            animationDelay: "220ms", background: "#2a2520", color: "#faf7f2",
+            borderRadius: 12, padding: "14px 18px",
+            fontFamily: "var(--font-jost), sans-serif", fontSize: 14, fontWeight: 600,
             textDecoration: "none",
           }}
         >
-          Review Look 1 — The Edit →
+          {firstLook ? `Review Look 1 — ${firstLook.name} →` : "Review Today's Looks →"}
         </Link>
 
         {/* divider */}
@@ -172,16 +201,10 @@ export default function MorningPage() {
           href="/chat"
           className="fade-up flex items-center justify-center"
           style={{
-            animationDelay: "320ms",
-            border: "1.5px dashed rgba(42,37,32,0.25)",
-            borderRadius: 12,
-            padding: "13px 18px",
-            fontFamily: "var(--font-jost), sans-serif",
-            fontSize: 13,
-            fontWeight: 500,
-            color: "#2a2520",
-            textDecoration: "none",
-            marginBottom: 16,
+            animationDelay: "320ms", border: "1.5px dashed rgba(42,37,32,0.25)",
+            borderRadius: 12, padding: "13px 18px",
+            fontFamily: "var(--font-jost), sans-serif", fontSize: 13, fontWeight: 500,
+            color: "#2a2520", textDecoration: "none", marginBottom: 16,
           }}
         >
           Planning for something else →

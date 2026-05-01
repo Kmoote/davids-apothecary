@@ -1,27 +1,30 @@
 "use client";
 
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { DavidAvatar } from "@/components/DavidBubble";
 import {
-  PLACEHOLDER_LOOKS,
-  resolveItems,
-  type LookSlotItem,
-} from "@/lib/placeholder-looks";
+  type RealLook,
+  type RealSlotItem,
+  getCachedLooks,
+  cacheLooks,
+  cacheWornLook,
+} from "@/lib/looks";
 
-const CARD_THRESHOLD = 100; // px to commit pass/wear on the overall card
-const ITEM_THRESHOLD = 40;  // px to swap an individual item
+const CARD_THRESHOLD = 100;
+const ITEM_THRESHOLD = 40;
 
 type Decision = "wear" | "pass";
 
-/* ── individual swipeable item tile ─────────────────────── */
+// ── individual item tile ──────────────────────────────────────────────────────
+
 function SwipeableItem({
   item,
   onSwap,
   onDragStart,
   onDragEnd,
 }: {
-  item: LookSlotItem;
+  item: RealSlotItem;
   onSwap: () => void;
   onDragStart: () => void;
   onDragEnd: () => void;
@@ -44,7 +47,6 @@ function SwipeableItem({
   const onPM = (e: React.PointerEvent) => {
     if (!dragging) return;
     e.stopPropagation();
-    // only track leftward drag for swapping
     liveX.current = Math.min(0, e.clientX - startX.current);
     setDx(liveX.current);
   };
@@ -69,17 +71,18 @@ function SwipeableItem({
   };
 
   const swapHintOpacity = Math.min(1, Math.abs(dx) / ITEM_THRESHOLD);
+  const swatch = item.colors[0] ?? "#cec5b0";
 
   return (
     <div
       onPointerDown={onPD}
       onPointerMove={onPM}
       onPointerUp={onPU}
-      className="texture relative flex flex-col justify-end"
+      className="relative"
       style={{
         borderRadius: 10,
         overflow: "hidden",
-        background: item.color,
+        background: swatch,
         cursor: dragging ? "grabbing" : "grab",
         touchAction: "none",
         userSelect: "none",
@@ -94,80 +97,59 @@ function SwipeableItem({
           : "transform 0.22s cubic-bezier(0.22,1,0.36,1), opacity 0.18s ease",
       }}
     >
-      {/* swap hint — appears as you drag */}
+      {/* photo */}
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={item.thumbnail_url ?? item.photo_url}
+        alt={item.name}
+        draggable={false}
+        className="absolute inset-0 w-full h-full object-cover"
+        style={{ pointerEvents: "none" }}
+      />
+
+      {/* dark gradient for label legibility */}
       <div
         style={{
-          position: "absolute",
-          top: 5,
-          left: 5,
-          opacity: swapHintOpacity * 0.8,
+          position: "absolute", inset: 0,
+          background: "linear-gradient(to bottom, rgba(0,0,0,0.22) 0%, transparent 38%, transparent 60%, rgba(0,0,0,0.55) 100%)",
           pointerEvents: "none",
         }}
-      >
-        <span
-          style={{
-            fontFamily: "var(--font-jost), sans-serif",
-            fontSize: 7,
-            color: item.textColor,
-            fontWeight: 500,
-          }}
-        >
-          ← swap
+      />
+
+      {/* slot label top-left */}
+      <div style={{ position: "absolute", top: 5, left: 6, pointerEvents: "none" }}>
+        <span style={{
+          fontFamily: "var(--font-jost), sans-serif",
+          fontSize: 7, fontWeight: 700, letterSpacing: "0.1em",
+          color: "#c4a882", textTransform: "uppercase",
+        }}>
+          {item.slot}
         </span>
       </div>
 
-      {/* idle hint (always faintly visible) */}
-      {!dragging && (
-        <div
-          style={{
-            position: "absolute",
-            top: 5,
-            right: 5,
-            opacity: 0.3,
-            pointerEvents: "none",
-          }}
-        >
-          <span
-            style={{
-              fontFamily: "var(--font-jost), sans-serif",
-              fontSize: 6.5,
-              color: item.textColor,
-            }}
-          >
-            ↔
-          </span>
-        </div>
-      )}
+      {/* swap hint */}
+      <div style={{
+        position: "absolute", top: 5, right: 5,
+        opacity: dragging ? swapHintOpacity * 0.9 : 0.35,
+        pointerEvents: "none",
+        transition: dragging ? "none" : "opacity 0.2s",
+      }}>
+        <span style={{
+          fontFamily: "var(--font-jost), sans-serif",
+          fontSize: 6.5, color: "#fff",
+        }}>
+          {dragging && dx < -8 ? "← swap" : "↔"}
+        </span>
+      </div>
 
-      {/* item labels */}
-      <div style={{ padding: "3px 5px 4px", position: "relative" }}>
-        <p
-          style={{
-            fontFamily: "var(--font-jost), sans-serif",
-            fontSize: 7,
-            fontWeight: 600,
-            letterSpacing: "0.08em",
-            color: item.textColor,
-            opacity: 0.7,
-            textAlign: "center",
-            lineHeight: 1.2,
-          }}
-        >
-          {item.label}
-        </p>
-        <p
-          style={{
-            fontFamily: "var(--font-jost), sans-serif",
-            fontSize: 7,
-            color: item.textColor,
-            opacity: 0.55,
-            textAlign: "center",
-            lineHeight: 1.2,
-            whiteSpace: "nowrap",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-          }}
-        >
+      {/* item name bottom */}
+      <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, padding: "3px 5px 5px", pointerEvents: "none" }}>
+        <p style={{
+          fontFamily: "var(--font-jost), sans-serif",
+          fontSize: 7.5, color: "#fff", fontWeight: 500,
+          lineHeight: 1.25, textAlign: "center",
+          whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+        }}>
           {item.name}
         </p>
       </div>
@@ -175,100 +157,150 @@ function SwipeableItem({
   );
 }
 
-/* ── swipeable flat-lay grid ────────────────────────────── */
-function SwipeableFlatLay({
-  items,
+// ── flat-lay grid ─────────────────────────────────────────────────────────────
+
+function FlatLay({
+  look,
+  altMap,
   onSwap,
   onItemDragStart,
   onItemDragEnd,
 }: {
-  items: LookSlotItem[];
+  look: RealLook;
+  altMap: Record<string, number>;
   onSwap: (slotIdx: number) => void;
   onItemDragStart: () => void;
   onItemDragEnd: () => void;
 }) {
   return (
-    <div
-      style={{
-        display: "grid",
-        gridTemplateColumns: "1fr 1fr",
-        gap: 8,
-        padding: 14,
-        height: "100%",
-      }}
-    >
-      {items.map((item, i) => (
-        <SwipeableItem
-          key={i}
-          item={item}
-          onSwap={() => onSwap(i)}
-          onDragStart={onItemDragStart}
-          onDragEnd={onItemDragEnd}
-        />
-      ))}
+    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, padding: 14, height: "100%" }}>
+      {look.slots.map((slot, i) => {
+        const key = `${look.look_id}_${i}`;
+        const itemIdx = altMap[key] ?? 0;
+        const item = slot.items[itemIdx % slot.items.length];
+        return (
+          <SwipeableItem
+            key={i}
+            item={item}
+            onSwap={() => onSwap(i)}
+            onDragStart={onItemDragStart}
+            onDragEnd={onItemDragEnd}
+          />
+        );
+      })}
     </div>
   );
 }
 
-/* ── main page ──────────────────────────────────────────── */
+// ── loading skeleton ──────────────────────────────────────────────────────────
+
+function LoadingSkeleton() {
+  return (
+    <div className="flex flex-col items-center justify-center gap-4" style={{ padding: "60px 0" }}>
+      <DavidAvatar size={42} />
+      <div className="flex gap-1.5">
+        {[0, 1, 2].map((i) => (
+          <span
+            key={i}
+            className={`dot-${i + 1}`}
+            style={{ width: 7, height: 7, borderRadius: "50%", background: "#c4a882", display: "inline-block" }}
+          />
+        ))}
+      </div>
+      <p style={{ fontFamily: "var(--font-jost), sans-serif", fontSize: 13, color: "#8a7a6a", textAlign: "center" }}>
+        David is pulling your looks…
+      </p>
+    </div>
+  );
+}
+
+// ── main page ─────────────────────────────────────────────────────────────────
+
 export default function SwipePage() {
   const router = useRouter();
 
-  // which look we're on
+  const [looks, setLooks] = useState<RealLook[] | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
   const [currentIndex, setCurrentIndex] = useState(0);
-  // overall pass/wear decisions per look index
   const [decisions, setDecisions] = useState<Record<number, Decision>>({});
-  // which alternative is selected per slot: key = `${lookId}_${slotIdx}`
   const [altMap, setAltMap] = useState<Record<string, number>>({});
 
-  // overall card drag state
   const [cardDx, setCardDx] = useState(0);
   const [isDraggingCard, setIsDraggingCard] = useState(false);
   const [cardExiting, setCardExiting] = useState<Decision | null>(null);
 
   const cardStartX = useRef(0);
   const cardLiveX = useRef(0);
-  // flag set by item tiles to block card drag while they're being swiped
   const itemDraggingRef = useRef(false);
 
-  const look = PLACEHOLDER_LOOKS[currentIndex];
-  const nextLook = PLACEHOLDER_LOOKS[currentIndex + 1];
-  const resolvedItems = resolveItems(look, altMap);
-  const nextItems = nextLook ? resolveItems(nextLook, altMap) : [];
+  // ── fetch looks ──
+  useEffect(() => {
+    const cached = getCachedLooks();
+    if (cached) { setLooks(cached); return; }
+
+    fetch("/api/generate-looks")
+      .then((r) => r.json())
+      .then((json) => {
+        if (json.error) throw new Error(json.error);
+        cacheLooks(json.looks);
+        setLooks(json.looks);
+      })
+      .catch((err) => setLoadError(err.message));
+  }, []);
+
+  const look = looks?.[currentIndex];
+  const nextLook = looks?.[currentIndex + 1];
 
   const commitLook = useCallback(
-    (decision: Decision) => {
+    async (decision: Decision) => {
+      if (!looks || !look) return;
       setCardExiting(decision);
+
+      // fire-and-forget decision record
+      if (look.look_id) {
+        fetch("/api/record-decision", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ look_id: look.look_id, action: decision }),
+        }).catch(() => {/* non-blocking */});
+      }
+
+      // cache the worn look for confirm page
+      if (decision === "wear") cacheWornLook(look);
+
       setTimeout(() => {
         const next = { ...decisions, [currentIndex]: decision };
         setDecisions(next);
         setCardExiting(null);
         setCardDx(0);
-        if (currentIndex >= PLACEHOLDER_LOOKS.length - 1) {
+
+        if (currentIndex >= looks.length - 1) {
+          // all done — navigate to confirm with the worn look's id
           const wornEntry = Object.entries(next).find(([, d]) => d === "wear");
-          const wornId = wornEntry ? wornEntry[0] : "0";
-          router.push(`/confirm?look=${wornId}`);
+          const wornIdx = wornEntry ? wornEntry[0] : "0";
+          const wornLook = looks[Number(wornIdx)];
+          if (wornLook) cacheWornLook(wornLook);
+          router.push(`/confirm?look=${wornIdx}`);
         } else {
           setCurrentIndex((i) => i + 1);
         }
       }, 300);
     },
-    [currentIndex, decisions, router]
+    [look, looks, currentIndex, decisions, router]
   );
 
   const swapItem = useCallback(
     (slotIdx: number) => {
-      const key = `${look.id}_${slotIdx}`;
-      const current = altMap[key] ?? look.defaultAlts[slotIdx];
-      setAltMap((prev) => ({
-        ...prev,
-        [key]: (current + 1) % look.slots[slotIdx].length,
-      }));
+      if (!look) return;
+      const key = `${look.look_id}_${slotIdx}`;
+      const currentAlt = altMap[key] ?? 0;
+      const total = look.slots[slotIdx]?.items.length ?? 1;
+      setAltMap((prev) => ({ ...prev, [key]: (currentAlt + 1) % total }));
     },
     [look, altMap]
   );
 
-  /* card pointer handlers — blocked when an item tile is being dragged */
   const onCardPD = (e: React.PointerEvent<HTMLDivElement>) => {
     if (itemDraggingRef.current) return;
     e.currentTarget.setPointerCapture(e.pointerId);
@@ -290,35 +322,58 @@ export default function SwipePage() {
     else setCardDx(0);
   };
 
-  const rotation = cardDx * 0.055;
-  const stampPct = Math.min(1, Math.max(0, (Math.abs(cardDx) - 60) / 50));
+  const rotation  = cardDx * 0.055;
+  const stampPct  = Math.min(1, Math.max(0, (Math.abs(cardDx) - 60) / 50));
+
+  // ── render ──
+
+  if (loadError) {
+    return (
+      <div className="flex flex-col items-center justify-center gap-4 bg-cream" style={{ height: "100dvh", maxWidth: 390, margin: "0 auto", padding: "0 24px" }}>
+        <p style={{ fontFamily: "var(--font-jost), sans-serif", fontSize: 13, color: "#c94040", textAlign: "center" }}>
+          {loadError}
+        </p>
+        <button
+          onClick={() => { setLoadError(null); window.location.reload(); }}
+          style={{ borderRadius: 12, padding: "12px 24px", border: "1.5px solid rgba(42,37,32,0.2)", background: "transparent", color: "#2a2520", fontFamily: "var(--font-jost), sans-serif", fontSize: 13, cursor: "pointer" }}
+        >
+          Try again
+        </button>
+      </div>
+    );
+  }
+
+  if (!looks || !look) {
+    return (
+      <div className="flex flex-col bg-cream" style={{ height: "100dvh", maxWidth: 390, margin: "0 auto" }}>
+        {/* header skeleton */}
+        <div className="flex items-center shrink-0" style={{ padding: "12px 18px 8px", gap: 12 }}>
+          <button onClick={() => router.push("/")} style={{ width: 34, height: 34, borderRadius: "50%", border: "1.5px solid rgba(42,37,32,0.2)", background: "transparent", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20, color: "#2a2520", flexShrink: 0 }}>
+            ‹
+          </button>
+        </div>
+        <div className="flex-1 flex items-center justify-center">
+          <LoadingSkeleton />
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div
-      className="flex flex-col bg-cream"
-      style={{ height: "100dvh", maxWidth: 390, margin: "0 auto" }}
-    >
+    <div className="flex flex-col bg-cream" style={{ height: "100dvh", maxWidth: 390, margin: "0 auto" }}>
+
       {/* ── header ── */}
-      <div
-        className="flex items-center shrink-0"
-        style={{ padding: "12px 18px 8px", gap: 12 }}
-      >
+      <div className="flex items-center shrink-0" style={{ padding: "12px 18px 8px", gap: 12 }}>
         <button
           onClick={() => router.push("/")}
-          style={{
-            width: 34, height: 34, borderRadius: "50%",
-            border: "1.5px solid rgba(42,37,32,0.2)",
-            background: "transparent", cursor: "pointer",
-            display: "flex", alignItems: "center", justifyContent: "center",
-            fontSize: 20, color: "#2a2520", lineHeight: 1, flexShrink: 0,
-          }}
+          style={{ width: 34, height: 34, borderRadius: "50%", border: "1.5px solid rgba(42,37,32,0.2)", background: "transparent", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20, color: "#2a2520", lineHeight: 1, flexShrink: 0 }}
         >
           ‹
         </button>
 
         {/* step pips */}
         <div className="flex items-center gap-1.5 flex-1 justify-center">
-          {PLACEHOLDER_LOOKS.map((_, i) => {
+          {looks.map((_, i) => {
             const d = decisions[i];
             const isActive = i === currentIndex;
             const bg = isActive ? "#2a2520"
@@ -327,48 +382,34 @@ export default function SwipePage() {
               : "rgba(42,37,32,0.15)";
             return (
               <div key={i} style={{
-                width: isActive ? 20 : 6, height: 6, borderRadius: 3,
-                background: bg,
+                width: isActive ? 20 : 6, height: 6, borderRadius: 3, background: bg,
                 transition: "width 0.25s ease, background 0.2s ease",
               }} />
             );
           })}
         </div>
 
-        <span style={{
-          fontFamily: "var(--font-jost), sans-serif",
-          fontSize: 11, color: "#8a7a6a", fontWeight: 500, flexShrink: 0,
-        }}>
-          {currentIndex + 1} of {PLACEHOLDER_LOOKS.length}
+        <span style={{ fontFamily: "var(--font-jost), sans-serif", fontSize: 11, color: "#8a7a6a", fontWeight: 500, flexShrink: 0 }}>
+          {currentIndex + 1} of {looks.length}
         </span>
       </div>
 
       {/* ── david's note ── */}
       <div style={{ padding: "0 18px 8px", flexShrink: 0 }}>
-        <div className="flex gap-2.5 items-start" style={{
-          background: "#f5f0e8", border: "1px solid rgba(42,37,32,0.12)",
-          borderRadius: 12, padding: "9px 12px",
-        }}>
+        <div className="flex gap-2.5 items-start" style={{ background: "#f5f0e8", border: "1px solid rgba(42,37,32,0.12)", borderRadius: 12, padding: "9px 12px" }}>
           <DavidAvatar size={24} />
-          <p style={{
-            fontFamily: "var(--font-jost), sans-serif",
-            fontSize: 12.5, color: "#2a2520", lineHeight: 1.55, flex: 1,
-          }}>
-            {look.davidNote}
+          <p style={{ fontFamily: "var(--font-jost), sans-serif", fontSize: 12.5, color: "#2a2520", lineHeight: 1.55, flex: 1 }}>
+            {look.david_note}
           </p>
         </div>
-        {/* swap affordance hint */}
-        <p style={{
-          fontFamily: "var(--font-jost), sans-serif",
-          fontSize: 10, color: "#8a7a6a", textAlign: "center",
-          marginTop: 6, letterSpacing: "0.02em",
-        }}>
+        <p style={{ fontFamily: "var(--font-jost), sans-serif", fontSize: 10, color: "#8a7a6a", textAlign: "center", marginTop: 6, letterSpacing: "0.02em" }}>
           ↔ Swipe any piece left to swap it out
         </p>
       </div>
 
       {/* ── card stack ── */}
       <div className="flex-1 relative" style={{ padding: "0 18px" }}>
+
         {/* background card */}
         {nextLook && (
           <div style={{
@@ -376,12 +417,22 @@ export default function SwipePage() {
             borderRadius: 16, border: "1px solid rgba(42,37,32,0.10)",
             background: "#f5f0e8", transform: "scale(0.96)", overflow: "hidden",
           }}>
-            <div style={{
-              display: "grid", gridTemplateColumns: "1fr 1fr",
-              gap: 8, padding: 14, height: "100%",
-            }}>
-              {nextItems.map((item, i) => (
-                <div key={i} className="texture relative" style={{ background: item.color, borderRadius: 10 }} />
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, padding: 14, height: "100%" }}>
+              {nextLook.slots.map((slot, i) => (
+                <div key={i} style={{
+                  borderRadius: 10, overflow: "hidden",
+                  background: slot.items[0]?.colors[0] ?? "#cec5b0",
+                  position: "relative",
+                }}>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={slot.items[0]?.thumbnail_url ?? slot.items[0]?.photo_url}
+                    alt=""
+                    draggable={false}
+                    className="absolute inset-0 w-full h-full object-cover"
+                    style={{ opacity: 0.6, pointerEvents: "none" }}
+                  />
+                </div>
               ))}
             </div>
           </div>
@@ -396,99 +447,54 @@ export default function SwipePage() {
             position: "absolute", inset: "0 18px",
             borderRadius: 16, border: "1.5px solid rgba(42,37,32,0.14)",
             background: "#f5f0e8", overflow: "hidden",
-            touchAction: "none",
-            cursor: isDraggingCard ? "grabbing" : "grab",
+            touchAction: "none", cursor: isDraggingCard ? "grabbing" : "grab",
             userSelect: "none",
             transform: cardExiting
               ? `translateX(${cardExiting === "wear" ? "130%" : "-130%"}) rotate(${cardExiting === "wear" ? 14 : -14}deg)`
               : `translateX(${cardDx}px) rotate(${rotation}deg)`,
-            transition: isDraggingCard ? "none"
-              : "transform 0.3s cubic-bezier(0.22,1,0.36,1)",
+            transition: isDraggingCard ? "none" : "transform 0.3s cubic-bezier(0.22,1,0.36,1)",
             display: "flex", flexDirection: "column",
           }}
         >
-          {/* swipeable flat-lay */}
+          {/* flat-lay */}
           <div style={{ flex: 1, overflow: "hidden" }}>
-            <SwipeableFlatLay
-              items={resolvedItems}
+            <FlatLay
+              look={look}
+              altMap={altMap}
               onSwap={swapItem}
               onItemDragStart={() => { itemDraggingRef.current = true; }}
-              onItemDragEnd={() => {
-                // small delay so the card's onPointerUp doesn't fire simultaneously
-                setTimeout(() => { itemDraggingRef.current = false; }, 50);
-              }}
+              onItemDragEnd={() => { setTimeout(() => { itemDraggingRef.current = false; }, 50); }}
             />
           </div>
 
           {/* look name strip */}
-          <div style={{
-            padding: "10px 16px 14px",
-            borderTop: "1px solid rgba(42,37,32,0.10)", flexShrink: 0,
-          }}>
-            <p style={{
-              fontFamily: "var(--font-jost), sans-serif",
-              fontSize: 9.5, color: "#c4a882", fontWeight: 600,
-              letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 3,
-            }}>
+          <div style={{ padding: "10px 16px 14px", borderTop: "1px solid rgba(42,37,32,0.10)", flexShrink: 0 }}>
+            <p style={{ fontFamily: "var(--font-jost), sans-serif", fontSize: 9.5, color: "#c4a882", fontWeight: 600, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 3 }}>
               {look.tag}
             </p>
-            <p style={{
-              fontFamily: "var(--font-playfair), serif",
-              fontStyle: "italic", fontWeight: 700, fontSize: 22, color: "#2a2520",
-            }}>
+            <p style={{ fontFamily: "var(--font-playfair), serif", fontStyle: "italic", fontWeight: 700, fontSize: 22, color: "#2a2520" }}>
               {look.name}
             </p>
           </div>
 
           {/* PASS stamp */}
-          <div style={{
-            position: "absolute", top: "28%", left: 18,
-            opacity: cardDx < 0 ? stampPct : 0,
-            transform: "rotate(-12deg)",
-            border: "3px solid #c94040", borderRadius: 6,
-            padding: "4px 12px", pointerEvents: "none",
-          }}>
-            <span style={{
-              fontFamily: "var(--font-playfair), serif",
-              fontStyle: "italic", fontWeight: 700, fontSize: 30, color: "#c94040",
-            }}>PASS</span>
+          <div style={{ position: "absolute", top: "28%", left: 18, opacity: cardDx < 0 ? stampPct : 0, transform: "rotate(-12deg)", border: "3px solid #c94040", borderRadius: 6, padding: "4px 12px", pointerEvents: "none" }}>
+            <span style={{ fontFamily: "var(--font-playfair), serif", fontStyle: "italic", fontWeight: 700, fontSize: 30, color: "#c94040" }}>PASS</span>
           </div>
 
           {/* WEAR stamp */}
-          <div style={{
-            position: "absolute", top: "28%", right: 18,
-            opacity: cardDx > 0 ? stampPct : 0,
-            transform: "rotate(12deg)",
-            border: "3px solid #3d7a55", borderRadius: 6,
-            padding: "4px 12px", pointerEvents: "none",
-          }}>
-            <span style={{
-              fontFamily: "var(--font-playfair), serif",
-              fontStyle: "italic", fontWeight: 700, fontSize: 30, color: "#3d7a55",
-            }}>WEAR</span>
+          <div style={{ position: "absolute", top: "28%", right: 18, opacity: cardDx > 0 ? stampPct : 0, transform: "rotate(12deg)", border: "3px solid #3d7a55", borderRadius: 6, padding: "4px 12px", pointerEvents: "none" }}>
+            <span style={{ fontFamily: "var(--font-playfair), serif", fontStyle: "italic", fontWeight: 700, fontSize: 30, color: "#3d7a55" }}>WEAR</span>
           </div>
         </div>
       </div>
 
-      {/* ── footer buttons ── */}
-      <div className="flex gap-3 shrink-0" style={{
-        padding: "14px 18px",
-        paddingBottom: "max(18px, env(safe-area-inset-bottom))",
-      }}>
-        <button onClick={() => commitLook("pass")} style={{
-          flex: 1, borderRadius: 12, padding: "15px 0",
-          border: "1.5px solid #c94040", background: "transparent",
-          color: "#c94040", fontFamily: "var(--font-jost), sans-serif",
-          fontSize: 14, fontWeight: 600, cursor: "pointer",
-        }}>
+      {/* ── footer ── */}
+      <div className="flex gap-3 shrink-0" style={{ padding: "14px 18px", paddingBottom: "max(18px, env(safe-area-inset-bottom))" }}>
+        <button onClick={() => commitLook("pass")} style={{ flex: 1, borderRadius: 12, padding: "15px 0", border: "1.5px solid #c94040", background: "transparent", color: "#c94040", fontFamily: "var(--font-jost), sans-serif", fontSize: 14, fontWeight: 600, cursor: "pointer" }}>
           ✕ Pass
         </button>
-        <button onClick={() => commitLook("wear")} style={{
-          flex: 1.4, borderRadius: 12, padding: "15px 0",
-          border: "none", background: "#3d7a55",
-          color: "#faf7f2", fontFamily: "var(--font-jost), sans-serif",
-          fontSize: 14, fontWeight: 600, cursor: "pointer",
-        }}>
+        <button onClick={() => commitLook("wear")} style={{ flex: 1.4, borderRadius: 12, padding: "15px 0", border: "none", background: "#3d7a55", color: "#faf7f2", fontFamily: "var(--font-jost), sans-serif", fontSize: 14, fontWeight: 600, cursor: "pointer" }}>
           ✓ Wear this
         </button>
       </div>
