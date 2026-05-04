@@ -47,6 +47,39 @@ You'll build exactly 3 outfit looks. Each has 4 slots. Favour these slot combos:
   • dress + shoes + layer + accessory (for dress days)
 Never repeat the same item across looks. Make each look feel like a distinct mood.`;
 
+// ── preference summary ────────────────────────────────────────────────────────
+
+type UserPrefs = {
+  boldness: number | null;
+  colour_play: number | null;
+  edge: number | null;
+  classic: number | null;
+  notes_freetext: string | null;
+  corrections: string[] | null;
+  recent_learnings: { text: string; date?: string }[] | null;
+};
+
+const TRAIT_LABELS: Record<string, [string, string, string]> = {
+  boldness:    ["Muted palette", "Mid-range palette", "Bold palette"],
+  colour_play: ["Soft silhouettes", "Mixed silhouettes", "Structured silhouettes"],
+  edge:        ["Classic style", "Selective trend exposure", "Trend-forward"],
+  classic:     ["Plays it safe", "Moderate risk tolerance", "Loves a push"],
+};
+
+function buildPrefSummary(prefs: UserPrefs | null): string {
+  if (!prefs) return "";
+  const traits = (["boldness", "colour_play", "edge", "classic"] as const)
+    .map((k) => TRAIT_LABELS[k][prefs[k] ?? 1])
+    .join(". ");
+  const corrections = prefs.corrections?.length
+    ? `Rules from Catherine: ${prefs.corrections.join("; ")}.`
+    : "";
+  const note = prefs.notes_freetext
+    ? `Catherine's note to David: "${prefs.notes_freetext}"`
+    : "";
+  return [traits, corrections, note].filter(Boolean).join(" ");
+}
+
 const buildPrompt = (items: object[], season: string) =>
   `It's ${season}. Here are Catherine's most-available pieces for today (${items.length} items — pre-filtered by season and recency):
 ${JSON.stringify(items)}
@@ -180,10 +213,23 @@ export async function GET() {
       return NextResponse.json({ error: "Not enough wardrobe items yet" }, { status: 422 });
     }
 
-    // 2. Build the ~35–40 item candidate pool (constant size as wardrobe grows)
+    // 2. Fetch Catherine's style preferences — degrade gracefully if missing
+    const { data: prefsRow } = await supabase
+      .from("user_preferences")
+      .select("boldness,colour_play,edge,classic,notes_freetext,corrections,recent_learnings")
+      .eq("user_id", CATHERINE_USER_ID)
+      .single();
+
+    const prefSummary = buildPrefSummary(prefsRow ?? null);
+    // Append preferences to David's system prompt when available
+    const systemPrompt = prefSummary
+      ? `${DAVID_SYSTEM}\n\nCatherine's current style settings: ${prefSummary}`
+      : DAVID_SYSTEM;
+
+    // 3. Build the ~35–40 item candidate pool (constant size as wardrobe grows)
     const candidates = buildCandidatePool(allItems, season);
 
-    // 3. Condensed payload for Claude — metadata only, no photo URLs
+    // 4. Condensed payload for Claude — metadata only, no photo URLs
     const condensed = candidates.map((r) => ({
       id:           r.id,
       name:         r.name ?? r.category,
@@ -197,11 +243,11 @@ export async function GET() {
       fabric:       r.fabric,
     }));
 
-    // 4. Call Claude with the focused candidate pool
+    // 5. Call Claude with the focused candidate pool + Catherine's preferences
     const msg = await anthropic.messages.create({
       model: "claude-haiku-4-5-20251001",
       max_tokens: 1200,
-      system: DAVID_SYSTEM,
+      system: systemPrompt,
       messages: [{ role: "user", content: buildPrompt(condensed, season) }],
     });
 
@@ -214,7 +260,7 @@ export async function GET() {
       slots: Array<{ label: string; item_id: string }>;
     }>;
 
-    // 5. Resolve items + build alternatives (alts drawn from full wardrobe, not just candidates)
+    // 6. Resolve items + build alternatives (alts drawn from full wardrobe, not just candidates)
     const candidateMap = new Map(candidates.map((r) => [r.id, r]));
     const usedIds      = new Set<string>();
     const resolvedLooks: Omit<RealLook, "look_id">[] = [];
@@ -278,7 +324,7 @@ export async function GET() {
 
     if (resolvedLooks.length === 0) throw new Error("Could not resolve any looks");
 
-    // 6. Persist look rows so the wear trigger can update wear_count
+    // 7. Persist look rows so the wear trigger can update wear_count
     const finalLooks: RealLook[] = [];
 
     for (const look of resolvedLooks) {

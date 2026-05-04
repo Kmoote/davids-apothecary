@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { supabase, CATHERINE_USER_ID } from "@/lib/supabase";
 import { DALogo } from "@/components/DALogo";
 import { DavidAvatar } from "@/components/DavidBubble";
@@ -24,9 +24,30 @@ const TRAITS = [
   { key: "classic",     label: "Risk Tolerance",   ends: ["Safe",    "Low-Mid", "Push"]       },
 ] as const;
 
-function TraitSlider({ label, value, ends }: { label: string; value: number; ends: readonly [string, string, string] }) {
+type TraitKey = typeof TRAITS[number]["key"];
+
+function TraitSlider({
+  label,
+  value,
+  ends,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  ends: readonly [string, string, string];
+  onChange?: (v: number) => void;
+}) {
+  const interactive = !!onChange;
   return (
-    <div style={{ padding: "10px 14px", background: "#f5f0e8", borderRadius: 12, border: "1px solid rgba(42,37,32,0.10)" }}>
+    <div
+      style={{
+        padding: "10px 14px",
+        background: "#f5f0e8",
+        borderRadius: 12,
+        border: "1px solid rgba(42,37,32,0.10)",
+        cursor: interactive ? "pointer" : "default",
+      }}
+    >
       <div className="flex justify-between items-center mb-2">
         <span style={{ fontFamily: "var(--font-jost), sans-serif", fontSize: 11, fontWeight: 600, color: "#2a2520", letterSpacing: "0.04em" }}>{label}</span>
         <span style={{ fontFamily: "var(--font-jost), sans-serif", fontSize: 11, color: "#c4a882", fontWeight: 600 }}>{ends[value]}</span>
@@ -35,14 +56,34 @@ function TraitSlider({ label, value, ends }: { label: string; value: number; end
         {[0, 1, 2].map((seg) => (
           <div
             key={seg}
-            className="flex-1"
-            style={{ height: 6, borderRadius: 3, background: seg <= value ? "#c4a882" : "rgba(42,37,32,0.12)" }}
+            onClick={() => onChange?.(seg)}
+            style={{
+              flex: 1,
+              height: 6,
+              borderRadius: 3,
+              background: seg <= value ? "#c4a882" : "rgba(42,37,32,0.12)",
+              cursor: interactive ? "pointer" : "default",
+              // slightly larger tap target via padding trick
+              margin: "4px 0",
+            }}
           />
         ))}
       </div>
       <div className="flex justify-between mt-1">
         {ends.map((e, i) => (
-          <span key={i} style={{ fontFamily: "var(--font-jost), sans-serif", fontSize: 8.5, color: i === value ? "#2a2520" : "#8a7a6a", fontWeight: i === value ? 600 : 400 }}>{e}</span>
+          <span
+            key={i}
+            onClick={() => onChange?.(i)}
+            style={{
+              fontFamily: "var(--font-jost), sans-serif",
+              fontSize: 8.5,
+              color: i === value ? "#2a2520" : "#8a7a6a",
+              fontWeight: i === value ? 600 : 400,
+              cursor: interactive ? "pointer" : "default",
+            }}
+          >
+            {e}
+          </span>
         ))}
       </div>
     </div>
@@ -51,7 +92,10 @@ function TraitSlider({ label, value, ends }: { label: string; value: number; end
 
 export default function ProfilePage() {
   const [prefs, setPrefs] = useState<Prefs | null>(null);
+  const [draft, setDraft] = useState<Prefs | null>(null);
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
 
   useEffect(() => {
     async function load() {
@@ -61,10 +105,50 @@ export default function ProfilePage() {
         .eq("user_id", CATHERINE_USER_ID)
         .single();
       setPrefs(data ?? null);
+      setDraft(data ?? null);
       setLoading(false);
     }
     load();
   }, []);
+
+  // True when draft differs from saved prefs
+  const isDirty = draft && prefs && (
+    draft.boldness !== prefs.boldness ||
+    draft.colour_play !== prefs.colour_play ||
+    draft.edge !== prefs.edge ||
+    draft.classic !== prefs.classic ||
+    (draft.notes_freetext ?? "") !== (prefs.notes_freetext ?? "")
+  );
+
+  const setTrait = useCallback((key: TraitKey, value: number) => {
+    setDraft((d) => d ? { ...d, [key]: value } : d);
+  }, []);
+
+  const setNote = useCallback((text: string) => {
+    setDraft((d) => d ? { ...d, notes_freetext: text } : d);
+  }, []);
+
+  const handleSave = async () => {
+    if (!draft) return;
+    setSaving(true);
+    const { error } = await supabase
+      .from("user_preferences")
+      .upsert({
+        user_id: CATHERINE_USER_ID,
+        boldness: draft.boldness,
+        colour_play: draft.colour_play,
+        edge: draft.edge,
+        classic: draft.classic,
+        notes_freetext: draft.notes_freetext,
+      }, { onConflict: "user_id" });
+
+    setSaving(false);
+    if (!error) {
+      setPrefs(draft);   // commit draft → saved
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2500);
+    }
+  };
 
   return (
     <div className="flex flex-col h-full bg-cream overflow-hidden">
@@ -91,7 +175,7 @@ export default function ProfilePage() {
               ))}
             </div>
           </div>
-        ) : prefs ? (
+        ) : draft ? (
           <>
             {/* How David sees you */}
             <section>
@@ -100,7 +184,7 @@ export default function ProfilePage() {
                 <DavidAvatar />
                 <div style={{ flex: 1, background: "#f5f0e8", border: "1px solid rgba(42,37,32,0.14)", borderRadius: "3px 14px 14px 14px", padding: "10px 14px" }}>
                   <p style={{ fontFamily: "var(--font-jost), sans-serif", fontSize: 13, color: "#2a2520", lineHeight: 1.6, fontStyle: "italic" }}>
-                    {prefs.notes_freetext ?? "Quietly confident. You know what works — sometimes you just need a nudge to actually wear it."}
+                    {draft.notes_freetext ?? "Quietly confident. You know what works — sometimes you just need a nudge to actually wear it."}
                   </p>
                 </div>
               </div>
@@ -113,17 +197,49 @@ export default function ProfilePage() {
               </p>
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                 {TRAITS.map((t) => (
-                  <TraitSlider key={t.key} label={t.label} value={prefs[t.key]} ends={t.ends} />
+                  <TraitSlider
+                    key={t.key}
+                    label={t.label}
+                    value={draft[t.key]}
+                    ends={t.ends}
+                    onChange={(v) => setTrait(t.key, v)}
+                  />
                 ))}
               </div>
             </section>
 
+            {/* Note to David */}
+            <section>
+              <p style={{ fontFamily: "var(--font-jost), sans-serif", fontSize: 9, color: "#8a7a6a", letterSpacing: "0.1em", fontWeight: 500, textTransform: "uppercase", marginBottom: 10 }}>
+                Note to David
+              </p>
+              <textarea
+                value={draft.notes_freetext ?? ""}
+                onChange={(e) => setNote(e.target.value)}
+                placeholder="Tell David anything — a mood, an occasion coming up, something you want to wear more…"
+                rows={3}
+                style={{
+                  width: "100%",
+                  fontFamily: "var(--font-jost), sans-serif",
+                  fontSize: 13,
+                  color: "#2a2520",
+                  background: "#f5f0e8",
+                  border: "1px solid rgba(42,37,32,0.14)",
+                  borderRadius: 12,
+                  padding: "10px 14px",
+                  resize: "none",
+                  outline: "none",
+                  lineHeight: 1.6,
+                }}
+              />
+            </section>
+
             {/* Palette */}
-            {prefs.palette.length > 0 && (
+            {draft.palette?.length > 0 && (
               <section>
                 <p style={{ fontFamily: "var(--font-jost), sans-serif", fontSize: 9, color: "#8a7a6a", letterSpacing: "0.1em", fontWeight: 500, textTransform: "uppercase", marginBottom: 10 }}>Your Palette</p>
                 <div className="flex gap-2">
-                  {prefs.palette.map((hex, i) => (
+                  {draft.palette.map((hex, i) => (
                     <div
                       key={i}
                       className="flex-1 relative texture"
@@ -135,11 +251,11 @@ export default function ProfilePage() {
             )}
 
             {/* Corrections */}
-            {prefs.corrections.length > 0 && (
+            {draft.corrections?.length > 0 && (
               <section>
                 <p style={{ fontFamily: "var(--font-jost), sans-serif", fontSize: 9, color: "#8a7a6a", letterSpacing: "0.1em", fontWeight: 500, textTransform: "uppercase", marginBottom: 10 }}>Correct David</p>
                 <div className="flex flex-wrap gap-2">
-                  {prefs.corrections.map((c, i) => (
+                  {draft.corrections.map((c, i) => (
                     <span
                       key={i}
                       style={{ fontSize: 11, fontFamily: "var(--font-jost), sans-serif", fontWeight: 500, padding: "5px 12px", borderRadius: 20, background: "#f5f0e8", border: "1px solid rgba(42,37,32,0.14)", color: "#2a2520" }}
@@ -152,11 +268,11 @@ export default function ProfilePage() {
             )}
 
             {/* Learnings */}
-            {prefs.recent_learnings.length > 0 && (
+            {draft.recent_learnings?.length > 0 && (
               <section>
                 <p style={{ fontFamily: "var(--font-jost), sans-serif", fontSize: 9, color: "#8a7a6a", letterSpacing: "0.1em", fontWeight: 500, textTransform: "uppercase", marginBottom: 10 }}>Recent Learnings</p>
                 <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                  {prefs.recent_learnings.map((l, i) => (
+                  {draft.recent_learnings.map((l, i) => (
                     <div
                       key={i}
                       style={{ borderLeft: "2.5px solid #c4a882", paddingLeft: 10 }}
@@ -168,6 +284,32 @@ export default function ProfilePage() {
                   ))}
                 </div>
               </section>
+            )}
+
+            {/* Save button — only visible when dirty */}
+            {isDirty && (
+              <div style={{ position: "sticky", bottom: 0, paddingBottom: 8 }}>
+                <button
+                  onClick={handleSave}
+                  disabled={saving}
+                  style={{
+                    width: "100%",
+                    padding: "13px 0",
+                    borderRadius: 14,
+                    background: saved ? "#7a9e7e" : "#2a2520",
+                    color: saved ? "#fff" : "#c4a882",
+                    fontFamily: "var(--font-jost), sans-serif",
+                    fontSize: 13,
+                    fontWeight: 600,
+                    letterSpacing: "0.06em",
+                    border: "none",
+                    cursor: saving ? "wait" : "pointer",
+                    transition: "background 0.3s",
+                  }}
+                >
+                  {saving ? "Saving…" : saved ? "Saved ✓" : "Save Changes"}
+                </button>
+              </div>
             )}
           </>
         ) : (
