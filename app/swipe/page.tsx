@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useCallback, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { DavidAvatar } from "@/components/DavidBubble";
 import {
   type RealLook,
@@ -218,11 +218,14 @@ function LoadingSkeleton() {
 
 export default function SwipePage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
 
   const [looks, setLooks] = useState<RealLook[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  const [currentIndex, setCurrentIndex] = useState(0);
+  // Read ?look=N from the URL so tapping Look 2 or 3 on home starts there
+  const startIndex = Math.max(0, parseInt(searchParams.get("look") ?? "0", 10) || 0);
+  const [currentIndex, setCurrentIndex] = useState(startIndex);
   const [decisions, setDecisions] = useState<Record<number, Decision>>({});
   const [altMap, setAltMap] = useState<Record<string, number>>({});
 

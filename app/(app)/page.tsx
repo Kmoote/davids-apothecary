@@ -23,10 +23,10 @@ function useDayGreeting() {
 
 // ── look card ─────────────────────────────────────────────────────────────────
 
-function LookCard({ look, isFirst }: { look: RealLook; isFirst: boolean }) {
+function LookCard({ look, index, isFirst }: { look: RealLook; index: number; isFirst: boolean }) {
   return (
     <Link
-      href="/swipe"
+      href={`/swipe?look=${index}`}
       className="shrink-0 flex flex-col"
       style={{
         width: 102, borderRadius: 12,
@@ -167,7 +167,7 @@ export default function MorningPage() {
           </p>
           <div className="flex gap-3 overflow-x-auto no-scrollbar pb-1">
             {looks
-              ? looks.map((look, i) => <LookCard key={look.look_id} look={look} isFirst={i === 0} />)
+              ? looks.map((look, i) => <LookCard key={look.look_id} look={look} index={i} isFirst={i === 0} />)
               : [0, 1, 2].map((i) => <SkeletonCard key={i} isFirst={i === 0} />)
             }
           </div>
