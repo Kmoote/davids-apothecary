@@ -46,17 +46,41 @@ const anthropic = new Anthropic({ apiKey: ANTHROPIC_KEY });
 const TAGGER_PROMPT = `Analyze this clothing item photo and return a JSON object.
 Return ONLY valid JSON — no explanation, no markdown, just the raw JSON object.
 
+CATEGORY RULES (pick the best fit — do not guess "tops" as a default):
+- "tops": shirts, blouses, t-shirts, tank tops, sweaters, cardigans, bodysuits
+- "bottoms": trousers, jeans, shorts, skirts (any length), leggings
+- "dresses": one-piece garments covering torso + lower body (including jumpsuits)
+- "outerwear": jackets, coats, blazers, vests, windbreakers
+- "shoes": all footwear — heels, flats, boots, sneakers, sandals, loafers
+- "accessories": bags, scarves, belts, jewellery, hats, sunglasses
+
+OCCASION RULES (can have multiple — be generous, not restrictive):
+- "casual": relaxed everyday wear
+- "work": office or smart-casual professional settings
+- "evening": dinner, drinks, events after 6pm
+- "weekend": brunches, errands, relaxed social outings
+- "formal": black tie, weddings, galas
+- "sport": athletic or activewear
+
+FORMALITY GUIDE:
+1 = athletic / very casual (jeans + plain tee)
+2 = casual-smart (nice jeans, casual blouse)
+3 = smart casual (chinos, blazer, midi dress)
+4 = business / cocktail
+5 = formal / black tie
+
+Fields required:
 {
-  "category": one of: "tops" | "bottoms" | "outerwear" | "shoes" | "accessories" | "dresses",
-  "subcategory": specific type (e.g. "blazer", "jeans", "sneakers", "midi skirt"),
-  "colors": array of 1–3 hex color strings for the dominant colors (e.g. ["#2a3a54"]),
-  "occasion_tags": array from: "casual" | "work" | "evening" | "weekend" | "formal" | "sport",
-  "season_fit": array from: "spring" | "summer" | "fall" | "winter",
-  "formality": integer 1–5 (1=very casual, 5=very formal),
-  "name": short descriptive name (e.g. "Navy Wool Blazer"),
-  "brand": brand name if visible, otherwise null,
-  "pattern": "solid" | "striped" | "floral" | "checked" | "printed" | "textured" | null,
-  "fabric": "cotton" | "wool" | "silk" | "linen" | "denim" | "leather" | "synthetic" | null
+  "category": one of the categories above,
+  "subcategory": specific type (e.g. "blazer", "straight-leg jeans", "strappy sandal", "midi skirt"),
+  "colors": array of 1–3 hex color strings for the dominant colors (e.g. ["#2a3a54", "#f5f0e8"]),
+  "occasion_tags": array from the occasion values above (usually 2–3 tags),
+  "season_fit": array from: "spring" | "summer" | "fall" | "winter" — omit seasons where this item would be uncomfortable,
+  "formality": integer 1–5 using the guide above,
+  "name": short descriptive name in 3–5 words (e.g. "Navy Wool Blazer", "Ivory Silk Blouse", "Leopard Print Midi Skirt"),
+  "brand": brand name if clearly visible on the item, otherwise null,
+  "pattern": one of "solid" | "striped" | "floral" | "checked" | "geometric" | "animal_print" | "printed" | "textured" or null,
+  "fabric": fabric type if detectable ("cotton" | "wool" | "silk" | "linen" | "denim" | "leather" | "synthetic" | "knit") or null
 }`;
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -95,10 +119,10 @@ async function fetchBase64(publicUrl) {
   return { base64: resized.toString("base64"), mediaType: "image/jpeg" };
 }
 
-/** Call Claude Haiku vision and parse the tag JSON. */
+/** Call Claude Sonnet vision and parse the tag JSON. */
 async function tagImage(base64, mediaType) {
   const msg = await anthropic.messages.create({
-    model: "claude-haiku-4-5-20251001",
+    model: "claude-sonnet-4-6",
     max_tokens: 512,
     messages: [{
       role: "user",
@@ -116,7 +140,9 @@ async function tagImage(base64, mediaType) {
 // ── main ──────────────────────────────────────────────────────────────────────
 
 async function main() {
-  console.log("\n🗄  David's Apothecary — Bulk Tagger\n");
+  // --retag flag: re-tag existing items (update in place) instead of skipping them
+  const retag = process.argv.includes("--retag");
+  console.log(`\n🗄  David's Apothecary — Bulk Tagger${retag ? " (retag mode)" : ""}\n`);
 
   // 1. list files in bucket
   console.log(`📦  Listing files in "${BUCKET}"…`);
@@ -127,15 +153,16 @@ async function main() {
   }
   console.log(`   Found ${files.length} image(s)\n`);
 
-  // 2. fetch already-tagged photo_urls so we can skip them
+  // 2. fetch already-tagged photo_urls
   const { data: existing } = await supabase
     .from("wardrobe_items")
     .select("photo_url")
     .eq("user_id", CATHERINE_USER_ID);
   const tagged = new Set((existing ?? []).map((r) => r.photo_url));
 
-  // 3. process each untagged file
+  // 3. process each file
   let added = 0;
+  let updated = 0;
   let skipped = 0;
   let failed = 0;
 
@@ -144,19 +171,21 @@ async function main() {
     const { data: urlData } = supabase.storage.from(BUCKET).getPublicUrl(path);
     const publicUrl = urlData.publicUrl;
 
-    if (tagged.has(publicUrl)) {
+    const alreadyTagged = tagged.has(publicUrl);
+
+    if (alreadyTagged && !retag) {
       console.log(`   ⏭  [${i + 1}/${files.length}] skipped (already tagged): ${path}`);
       skipped++;
       continue;
     }
 
-    process.stdout.write(`   ⏳  [${i + 1}/${files.length}] tagging: ${path} … `);
+    process.stdout.write(`   ⏳  [${i + 1}/${files.length}] ${alreadyTagged ? "re-tagging" : "tagging"}: ${path} … `);
 
     try {
       const { base64, mediaType } = await fetchBase64(publicUrl);
       const tags = await tagImage(base64, mediaType);
 
-      const { error: dbErr } = await supabase.from("wardrobe_items").insert({
+      const payload = {
         user_id:       CATHERINE_USER_ID,
         photo_url:     publicUrl,
         thumbnail_url: publicUrl,
@@ -171,12 +200,25 @@ async function main() {
         name:          tags.name    ?? null,
         brand:         tags.brand   ?? null,
         tagger_raw:    tags,
-      });
+      };
+
+      let dbErr;
+      if (alreadyTagged) {
+        // update existing row by photo_url
+        ({ error: dbErr } = await supabase
+          .from("wardrobe_items")
+          .update(payload)
+          .eq("photo_url", publicUrl)
+          .eq("user_id", CATHERINE_USER_ID));
+        if (!dbErr) updated++;
+      } else {
+        ({ error: dbErr } = await supabase.from("wardrobe_items").insert(payload));
+        if (!dbErr) added++;
+      }
 
       if (dbErr) throw new Error(dbErr.message);
 
       console.log(`✅  ${tags.name ?? tags.category} (${tags.category})`);
-      added++;
 
       // small delay to avoid rate-limiting
       if (i < files.length - 1) await new Promise((r) => setTimeout(r, 400));
@@ -188,7 +230,8 @@ async function main() {
   }
 
   console.log(`\n✨  Done.`);
-  console.log(`   ${added} tagged and added`);
+  if (added)   console.log(`   ${added} tagged and added`);
+  if (updated) console.log(`   ${updated} re-tagged and updated`);
   if (skipped) console.log(`   ${skipped} already in wardrobe (skipped)`);
   if (failed)  console.log(`   ${failed} failed — re-run to retry`);
   console.log();
