@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useCallback, useEffect } from "react";
+import { Suspense, useState, useRef, useCallback, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { DavidAvatar } from "@/components/DavidBubble";
 import {
@@ -216,7 +216,7 @@ function LoadingSkeleton() {
 
 // ── main page ─────────────────────────────────────────────────────────────────
 
-export default function SwipePage() {
+function SwipePageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -508,5 +508,13 @@ export default function SwipePage() {
         </button>
       </div>
     </div>
+  );
+}
+
+export default function SwipePage() {
+  return (
+    <Suspense>
+      <SwipePageInner />
+    </Suspense>
   );
 }
