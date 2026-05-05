@@ -14,18 +14,41 @@ const CATHERINE_USER_ID = "00000000-0000-0000-0000-000000000001";
 const TAGGER_PROMPT = `Analyze this clothing item photo and return a JSON object.
 Return ONLY valid JSON — no explanation, no markdown, just the raw JSON object.
 
+CATEGORY RULES (pick the best fit — do not guess "tops" as a default):
+- "tops": shirts, blouses, t-shirts, tank tops, sweaters, cardigans, bodysuits
+- "bottoms": trousers, jeans, shorts, skirts (any length), leggings
+- "dresses": one-piece garments covering torso + lower body (including jumpsuits)
+- "outerwear": jackets, coats, blazers, vests, windbreakers
+- "shoes": all footwear — heels, flats, boots, sneakers, sandals, loafers
+- "accessories": bags, scarves, belts, jewellery, hats, sunglasses
+
+OCCASION RULES (can have multiple — be generous, not restrictive):
+- "casual": relaxed everyday wear
+- "work": office or smart-casual professional settings
+- "evening": dinner, drinks, events after 6pm
+- "weekend": brunches, errands, relaxed social outings
+- "formal": black tie, weddings, galas
+- "sport": athletic or activewear
+
+FORMALITY GUIDE:
+1 = athletic / very casual (jeans + plain tee)
+2 = casual-smart (nice jeans, casual blouse)
+3 = smart casual (chinos, blazer, midi dress)
+4 = business / cocktail
+5 = formal / black tie
+
 Fields required:
 {
-  "category": one of: "tops" | "bottoms" | "outerwear" | "shoes" | "accessories" | "dresses",
-  "subcategory": specific type (e.g. "blazer", "jeans", "sneakers", "midi skirt"),
+  "category": one of the categories above,
+  "subcategory": specific type (e.g. "blazer", "straight-leg jeans", "strappy sandal", "midi skirt"),
   "colors": array of 1–3 hex color strings for the dominant colors (e.g. ["#2a3a54", "#f5f0e8"]),
-  "occasion_tags": array from: "casual" | "work" | "evening" | "weekend" | "formal" | "sport",
-  "season_fit": array from: "spring" | "summer" | "fall" | "winter",
-  "formality": integer 1–5 (1 = very casual, 5 = very formal),
-  "name": short descriptive name (e.g. "Navy Wool Blazer", "Ivory Silk Blouse"),
-  "brand": brand name if visible on the item, otherwise null,
-  "pattern": pattern type ("solid" | "striped" | "floral" | "checked" | "printed" | "textured") or null,
-  "fabric": fabric type if detectable ("cotton" | "wool" | "silk" | "linen" | "denim" | "leather" | "synthetic") or null
+  "occasion_tags": array from the occasion values above (usually 2–3 tags),
+  "season_fit": array from: "spring" | "summer" | "fall" | "winter" — omit seasons where this item would be uncomfortable,
+  "formality": integer 1–5 using the guide above,
+  "name": short descriptive name in 3–5 words (e.g. "Navy Wool Blazer", "Ivory Silk Blouse", "Leopard Print Midi Skirt"),
+  "brand": brand name if clearly visible on the item, otherwise null,
+  "pattern": one of "solid" | "striped" | "floral" | "checked" | "geometric" | "animal_print" | "printed" | "textured" or null,
+  "fabric": fabric type if detectable ("cotton" | "wool" | "silk" | "linen" | "denim" | "leather" | "synthetic" | "knit") or null
 }`;
 
 export async function POST(req: NextRequest) {
@@ -66,7 +89,7 @@ export async function POST(req: NextRequest) {
 
     // Tag with Claude vision
     const msg = await anthropic.messages.create({
-      model: "claude-haiku-4-5-20251001",
+      model: "claude-sonnet-4-6", // Sonnet gives meaningfully better vision accuracy for clothing classification
       max_tokens: 512,
       messages: [
         {
