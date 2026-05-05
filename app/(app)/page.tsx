@@ -6,6 +6,23 @@ import { DALogo } from "@/components/DALogo";
 import { DavidBubble } from "@/components/DavidBubble";
 import { type RealLook, getCachedLooks, cacheLooks } from "@/lib/looks";
 
+// Bay Ridge, Brooklyn — Catherine's home base
+const HOME_LAT = 40.6357;
+const HOME_LON = -74.0236;
+
+type WeatherData = { emoji: string; temp: number; city: string };
+
+function useHomeWeather(): WeatherData | null {
+  const [weather, setWeather] = useState<WeatherData | null>(null);
+  useEffect(() => {
+    fetch(`/api/weather?lat=${HOME_LAT}&lon=${HOME_LON}`)
+      .then((r) => r.json())
+      .then((d) => { if (!d.error) setWeather(d); })
+      .catch(() => {/* silent fail — placeholder stays */});
+  }, []);
+  return weather;
+}
+
 function useDayGreeting() {
   const [label, setLabel] = useState("");
   useEffect(() => {
@@ -111,6 +128,7 @@ function SkeletonCard({ isFirst }: { isFirst: boolean }) {
 
 export default function MorningPage() {
   const dayLabel = useDayGreeting();
+  const weather  = useHomeWeather();
   const [looks, setLooks] = useState<RealLook[] | null>(null);
 
   useEffect(() => {
@@ -144,7 +162,7 @@ export default function MorningPage() {
           </p>
           <div className="flex items-center gap-2 mt-1">
             <p style={{ fontFamily: "var(--font-jost), sans-serif", fontSize: 13, color: "#d4cec6", fontWeight: 300 }}>
-              ☁ — · —° · —
+              {weather ? `${weather.emoji} ${weather.temp}° · ${weather.city}` : "☁ · —° · —"}
             </p>
           </div>
         </div>
