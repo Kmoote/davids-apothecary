@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { supabase, CATHERINE_USER_ID } from "@/lib/supabase";
+import { toThumbUrl } from "@/lib/looks";
 
 type WardrobeItem = {
   id: string;
@@ -198,7 +199,7 @@ function EditSheet({
               border: "1px solid rgba(42,37,32,0.12)",
             }}>
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={item.thumbnail_url ?? item.photo_url} alt={item.name ?? ""} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+              <img src={toThumbUrl(item.photo_url, 200) ?? item.photo_url} alt={item.name ?? ""} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
             </div>
             <div style={{ flex: 1 }}>
               <label style={label}>Name</label>
@@ -440,11 +441,12 @@ function ItemTile({ item, onEdit }: { item: WardrobeItem; onEdit: () => void }) 
     >
       {/* photo or colour swatch */}
       <div className="relative texture" style={{ aspectRatio: "1", background: swatch }}>
-        {item.thumbnail_url && (
+        {item.photo_url && (
           // eslint-disable-next-line @next/next/no-img-element
           <img
-            src={item.thumbnail_url}
+            src={toThumbUrl(item.photo_url, 300) ?? item.photo_url}
             alt={item.name ?? item.category}
+            loading="lazy"
             className="absolute inset-0 w-full h-full object-cover"
           />
         )}

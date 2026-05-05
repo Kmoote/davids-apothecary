@@ -2,6 +2,27 @@
  * Shared types and sessionStorage helpers for real generated looks.
  */
 
+// ── Image helpers ─────────────────────────────────────────────────────────────
+
+/**
+ * Convert a Supabase Storage URL to a resized thumbnail via the render endpoint.
+ * Reduces iPhone originals (~7 MB) to ~20 KB for grid display.
+ * Falls back to the original URL if conversion fails (non-Supabase URLs, etc.)
+ */
+export function toThumbUrl(url: string | null | undefined, size = 300): string | null {
+  if (!url) return null;
+  try {
+    // Swap /storage/v1/object/public/ → /storage/v1/render/image/public/
+    const transformed = url.replace(
+      "/storage/v1/object/public/",
+      "/storage/v1/render/image/public/"
+    );
+    return `${transformed}?width=${size}&height=${size}&resize=cover&quality=70`;
+  } catch {
+    return url;
+  }
+}
+
 export type RealSlotItem = {
   slot: string;           // "Top", "Bottom", "Shoes", "Layer", "Dress", etc.
   item_id: string;

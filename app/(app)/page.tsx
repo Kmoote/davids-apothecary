@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { DALogo } from "@/components/DALogo";
 import { DavidBubble } from "@/components/DavidBubble";
-import { type RealLook, getCachedLooks, cacheLooks } from "@/lib/looks";
+import { type RealLook, getCachedLooks, cacheLooks, toThumbUrl } from "@/lib/looks";
 
 // Bay Ridge, Brooklyn — Catherine's home base
 const HOME_LAT = 40.6357;
@@ -66,7 +66,7 @@ function LookCard({ look, index, isFirst }: { look: RealLook; index: number; isF
               {item && (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img
-                  src={item.thumbnail_url ?? item.photo_url}
+                  src={toThumbUrl(item.photo_url, 200) ?? item.photo_url}
                   alt={item.name}
                   draggable={false}
                   className="absolute inset-0 w-full h-full object-cover"
