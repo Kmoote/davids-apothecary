@@ -110,6 +110,7 @@ When tension arises — say, she's avoided a color historically but today's prom
 // ── preference summary ────────────────────────────────────────────────────────
 
 type UserPrefs = {
+  // existing — Style DNA
   boldness: number | null;
   colour_play: number | null;
   edge: number | null;
@@ -117,6 +118,30 @@ type UserPrefs = {
   notes_freetext: string | null;
   corrections: string[] | null;
   recent_learnings: { text: string; date?: string }[] | null;
+
+  // Phase A1a — profile expansion
+  height: string | null;
+  hair_color: string | null;
+  eye_color: string | null;
+  shoe_size: string | null;
+  skin_tone: string | null;
+  color_season: string | null;
+  favored_colors: string[] | null;
+  avoided_colors: string | null;
+  body_shape: string | null;
+  waist_size: string | null;
+  cup_size: string | null;
+  weight: string | null;
+  tops_that_fit: string | null;
+  tops_that_almost_fit: string | null;
+  bottoms_that_fit: string | null;
+  bottoms_that_almost_fit: string | null;
+  current_style_words: string[] | null;
+  aspirational_style_words: string[] | null;
+  admired_styles: string | null;
+  want_to_try: string | null;
+  not_me: string | null;
+  anything_else: string | null;
 };
 
 const TRAIT_LABELS: Record<string, [string, string, string]> = {
@@ -126,18 +151,75 @@ const TRAIT_LABELS: Record<string, [string, string, string]> = {
   classic:     ["Plays it safe", "Moderate risk tolerance", "Loves a push"],
 };
 
+const PREFS_SELECT = [
+  "boldness", "colour_play", "edge", "classic",
+  "notes_freetext", "corrections", "recent_learnings",
+  "height", "hair_color", "eye_color", "shoe_size",
+  "skin_tone", "color_season", "favored_colors", "avoided_colors",
+  "body_shape", "waist_size", "cup_size", "weight",
+  "tops_that_fit", "tops_that_almost_fit",
+  "bottoms_that_fit", "bottoms_that_almost_fit",
+  "current_style_words", "aspirational_style_words",
+  "admired_styles", "want_to_try", "not_me", "anything_else",
+].join(",");
+
 function buildPrefSummary(prefs: UserPrefs | null): string {
   if (!prefs) return "";
+
+  const lines: string[] = [];
+
+  // Style sliders (existing)
   const traits = (["boldness", "colour_play", "edge", "classic"] as const)
     .map((k) => TRAIT_LABELS[k][prefs[k] ?? 1])
     .join(". ");
-  const corrections = prefs.corrections?.length
-    ? `Rules from Catherine: ${prefs.corrections.join("; ")}.`
-    : "";
-  const note = prefs.notes_freetext
-    ? `Catherine's note to David: "${prefs.notes_freetext}"`
-    : "";
-  return [traits, corrections, note].filter(Boolean).join(" ");
+  if (traits) lines.push(`Style sliders: ${traits}.`);
+
+  // Physical context
+  const bodyParts = [
+    prefs.height        && `${prefs.height} tall`,
+    prefs.skin_tone     && `${prefs.skin_tone.toLowerCase()} skin tone`,
+    prefs.color_season  && `${prefs.color_season.toLowerCase()} color season`,
+    prefs.hair_color    && `${prefs.hair_color} hair`,
+    prefs.eye_color     && `${prefs.eye_color} eyes`,
+    prefs.body_shape    && `${prefs.body_shape.toLowerCase()} body shape`,
+    prefs.waist_size    && `waist ${prefs.waist_size}`,
+    prefs.cup_size      && `cup ${prefs.cup_size}`,
+    prefs.weight        && `weight ${prefs.weight}`,
+    prefs.shoe_size     && `shoe size ${prefs.shoe_size}`,
+  ].filter(Boolean);
+  if (bodyParts.length) lines.push(`Catherine — body: ${bodyParts.join(", ")}.`);
+
+  // Colors
+  const colorParts: string[] = [];
+  if (prefs.favored_colors?.length) colorParts.push(`loves ${prefs.favored_colors.join(", ")}`);
+  if (prefs.avoided_colors)         colorParts.push(`avoids ${prefs.avoided_colors}`);
+  if (colorParts.length) lines.push(`Catherine — colors: ${colorParts.join("; ")}.`);
+
+  // Fit notes
+  const fitParts: string[] = [];
+  if (prefs.tops_that_fit)           fitParts.push(`tops that work — ${prefs.tops_that_fit}`);
+  if (prefs.tops_that_almost_fit)    fitParts.push(`tops that almost work — ${prefs.tops_that_almost_fit}`);
+  if (prefs.bottoms_that_fit)        fitParts.push(`bottoms that work — ${prefs.bottoms_that_fit}`);
+  if (prefs.bottoms_that_almost_fit) fitParts.push(`bottoms that almost work — ${prefs.bottoms_that_almost_fit}`);
+  if (fitParts.length) lines.push(`Catherine — fit notes: ${fitParts.join("; ")}.`);
+
+  // Style direction
+  const styleParts: string[] = [];
+  if (prefs.current_style_words?.length)      styleParts.push(`now: ${prefs.current_style_words.join(", ")}`);
+  if (prefs.aspirational_style_words?.length) styleParts.push(`growing into: ${prefs.aspirational_style_words.join(", ")}`);
+  if (prefs.admired_styles)                    styleParts.push(`admires: ${prefs.admired_styles}`);
+  if (prefs.want_to_try)                       styleParts.push(`wants to try: ${prefs.want_to_try}`);
+  if (prefs.not_me)                            styleParts.push(`not her: ${prefs.not_me}`);
+  if (styleParts.length) lines.push(`Catherine — style: ${styleParts.join("; ")}.`);
+
+  // Catherine's notes
+  if (prefs.notes_freetext) lines.push(`Catherine's note to David: "${prefs.notes_freetext}"`);
+  if (prefs.anything_else)  lines.push(`Other context: ${prefs.anything_else}`);
+
+  // Corrections (existing)
+  if (prefs.corrections?.length) lines.push(`Rules from Catherine: ${prefs.corrections.join("; ")}.`);
+
+  return lines.join("\n");
 }
 
 const buildPrompt = (items: object[], season: string) =>
@@ -276,11 +358,11 @@ export async function GET() {
     // 2. Fetch Catherine's style preferences — degrade gracefully if missing
     const { data: prefsRow } = await supabase
       .from("user_preferences")
-      .select("boldness,colour_play,edge,classic,notes_freetext,corrections,recent_learnings")
+      .select(PREFS_SELECT)
       .eq("user_id", CATHERINE_USER_ID)
       .single();
 
-    const prefSummary = buildPrefSummary(prefsRow ?? null);
+    const prefSummary = buildPrefSummary((prefsRow ?? null) as UserPrefs | null);
     // Append preferences to David's system prompt when available
     const systemPrompt = prefSummary
       ? `${DAVID_SYSTEM}\n\nCatherine's current style settings: ${prefSummary}`
