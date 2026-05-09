@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { createClient } from "@supabase/supabase-js";
-import type { RealLook, RealLookSlot, RealSlotItem } from "@/lib/looks";
+import type { RealLook, RealSlotItem } from "@/lib/looks";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const supabase  = createClient(
@@ -402,69 +402,85 @@ export async function GET() {
       slots: Array<{ label: string; item_id: string }>;
     }>;
 
-    // 6. Resolve items + build alternatives (alts drawn from full wardrobe, not just candidates)
-    const candidateMap = new Map(candidates.map((r) => [r.id, r]));
-    const usedIds      = new Set<string>();
-    const resolvedLooks: Omit<RealLook, "look_id">[] = [];
+    // 6. Resolve items + alternatives. Two-pass:
+    //    Pass 1 picks each look's primary items (cross-look unique).
+    //    Pass 2 picks alts per slot, excluding only the primary set.
+    //
+    //    Why two-pass: alts are visual swap options on /swipe — they don't
+    //    need cross-look uniqueness. Reserving them globally (the previous
+    //    behavior) exhausted low-supply categories before look 3 could fill,
+    //    e.g. shoes: 6 candidates vs 9 needed if each look reserves 1+2.
+    //    Excluding primaries from the alt pool also prevents an alt from
+    //    duplicating another look's primary item.
+    const candidateMap    = new Map(candidates.map((r) => [r.id, r]));
+    const FALLBACK_LABELS = ["Top", "Bottom", "Shoes", "Layer"];
+    const CAT_MAP: Record<string, string> = {
+      Top: "tops", Bottom: "bottoms", Shoes: "shoes", Layer: "outerwear",
+      Dress: "dresses", Accessory: "accessories",
+    };
 
+    type LookCore = {
+      name: string; tag: string; david_note: string; closing_line: string;
+      primaries: Array<{ slot: string; row: WardrobeRow }>;
+    };
+    const usedPrimaries = new Set<string>();
+    const cores: LookCore[] = [];
+
+    // Pass 1 — primaries
     for (const cl of claudeLooks.slice(0, 3)) {
-      const slots: RealLookSlot[] = [];
+      const primaries: Array<{ slot: string; row: WardrobeRow }> = [];
 
       for (const s of (cl.slots ?? []).slice(0, 4)) {
         const row = candidateMap.get(s.item_id);
-        if (!row)          continue; // Claude hallucinated an ID
-        if (usedIds.has(row.id)) continue; // cross-look duplicate
-
-        usedIds.add(row.id);
-
-        // Alts come from the full wardrobe so swapping isn't limited to candidates
-        const alts = pickAlts(row.category, usedIds, allItems, 2);
-        alts.forEach((a) => usedIds.add(a.id));
-
-        slots.push({
-          slot: s.label,
-          items: [toSlotItem(row, s.label), ...alts.map((a) => toSlotItem(a, s.label))],
-        });
+        if (!row) continue;
+        if (usedPrimaries.has(row.id)) continue;
+        usedPrimaries.add(row.id);
+        primaries.push({ slot: s.label, row });
       }
 
-      // Pad to 4 slots if Claude returned fewer (shouldn't happen with new prompt, but be safe)
-      const FALLBACK_LABELS = ["Top", "Bottom", "Shoes", "Layer"];
-      if (slots.length > 0 && slots.length < 4) {
-        const usedLabels = new Set(slots.map((s) => s.slot));
+      // Pad to 4 slots if Claude returned fewer
+      if (primaries.length > 0 && primaries.length < 4) {
+        const usedLabels    = new Set(primaries.map((p) => p.slot));
         const missingLabels = FALLBACK_LABELS.filter((l) => !usedLabels.has(l));
         for (const label of missingLabels) {
-          // Find the category that maps to this label
-          const catMap: Record<string, string> = {
-            Top: "tops", Bottom: "bottoms", Shoes: "shoes", Layer: "outerwear",
-            Dress: "dresses", Accessory: "accessories",
-          };
-          const cat = catMap[label];
+          const cat = CAT_MAP[label];
           if (!cat) continue;
-          const fallback = allItems.find((r) => r.category === cat && !usedIds.has(r.id));
+          const fallback = allItems.find((r) => r.category === cat && !usedPrimaries.has(r.id));
           if (!fallback) continue;
-          usedIds.add(fallback.id);
-          const alts = pickAlts(fallback.category, usedIds, allItems, 2);
-          alts.forEach((a) => usedIds.add(a.id));
-          slots.push({
-            slot: label,
-            items: [toSlotItem(fallback, label), ...alts.map((a) => toSlotItem(a, label))],
-          });
-          if (slots.length === 4) break;
+          usedPrimaries.add(fallback.id);
+          primaries.push({ slot: label, row: fallback });
+          if (primaries.length === 4) break;
         }
       }
 
-      if (slots.length < 3) continue;
-
-      resolvedLooks.push({
-        name:         cl.name ?? "The Edit",
-        tag:          cl.tag  ?? "Casual Cool",
+      if (primaries.length < 3) continue;
+      cores.push({
+        name:         cl.name         ?? "The Edit",
+        tag:          cl.tag          ?? "Casual Cool",
         david_note:   cl.david_note   ?? "",
         closing_line: cl.closing_line ?? "",
-        slots,
+        primaries,
       });
     }
 
-    if (resolvedLooks.length === 0) throw new Error("Could not resolve any looks");
+    if (cores.length === 0) throw new Error("Could not resolve any looks");
+
+    // Pass 2 — alts (excluding only primaries; alts may repeat across looks)
+    const resolvedLooks: Omit<RealLook, "look_id">[] = cores.map((core) => ({
+      name:         core.name,
+      tag:          core.tag,
+      david_note:   core.david_note,
+      closing_line: core.closing_line,
+      slots: core.primaries.map(({ slot, row }) => ({
+        slot,
+        items: [
+          toSlotItem(row, slot),
+          ...pickAlts(row.category, usedPrimaries, allItems, 2).map((a) => toSlotItem(a, slot)),
+        ],
+      })),
+    }));
+
+    console.log(`[generate-looks] claude=${claudeLooks.length} resolved=${resolvedLooks.length} candidates=${candidates.length}`);
 
     // 7. Persist look rows so the wear trigger can update wear_count
     const finalLooks: RealLook[] = [];
