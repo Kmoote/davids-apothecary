@@ -100,49 +100,75 @@ async function fetchWeatherCtx(
   return { source: "climatology", summary: climSummary };
 }
 
-// ── per-event prompt: ONE outfit ──────────────────────────────────────────────
+// ── per-event prompt: ONE outfit, event-driven ────────────────────────────────
 
 const buildEventPrompt = (
   items: object[],
   season: string,
   ctx: { destinationCity: string; eventDate: string; timeOfDay: string; occasion: string; notes: string | null; weatherSummary: string; tripOccasion: string | null }
-) => `Trip context:
-- Destination: ${ctx.destinationCity}
-- Date: ${ctx.eventDate} (season: ${season})
-- Time of day: ${ctx.timeOfDay} — ${TIME_OF_DAY_HINTS[ctx.timeOfDay] ?? ""}
-- Event: ${ctx.occasion}${ctx.notes ? ` (${ctx.notes})` : ""}${ctx.tripOccasion ? `\n- Trip vibe: ${ctx.tripOccasion}` : ""}
-- Weather: ${ctx.weatherSummary}
+) => `You are dressing Catherine for a SPECIFIC event. Let the event drive every decision.
 
-Catherine's most-available pieces (${items.length} items, pre-filtered by season + recency):
+THE EVENT — this is the loudest signal in this prompt:
+Event:  ${ctx.occasion}${ctx.notes ? `\nCatherine's note: ${ctx.notes}` : ""}${ctx.tripOccasion ? `\nTrip vibe: ${ctx.tripOccasion}` : ""}
+
+CONTEXT — refines the answer, doesn't override it:
+Where:   ${ctx.destinationCity}
+When:    ${ctx.eventDate}, ${ctx.timeOfDay} — ${TIME_OF_DAY_HINTS[ctx.timeOfDay] ?? ""}
+Weather: ${ctx.weatherSummary}
+Season:  ${season}
+
+Before picking anything, picture Catherine actually at this event:
+  - What's underfoot — concrete, gravel, hardwood, marble?
+  - Is she sitting still, walking, or standing for hours?
+  - Indoor air conditioning or outdoor sun and wind?
+  - Is everyone else dressed up or down?
+  - Is comfort or polish doing more of the work?
+
+Worked examples of how the event should change the pick:
+  • "Cubs game" / outdoor sports → outdoor stadium, hours of walking + standing, sun and wind, casual vibe. Pick: comfortable closed-toe shoes she can stand in, layer for late-innings cool-down, casual fabrics. NOT: heels, suede, dry-clean only, fragile jewelry.
+  • "Dinner at Michelin steakhouse" → polished evening, indoor, low-light, deliberate. Pick: refined silhouette, considered jewelry, leather shoes, evening-appropriate fabric. NOT: athleisure, casual sneakers, wrinkled fabric, anything athleisure-adjacent.
+  • "Museum walk" → midweight, hours of standing on hard floors, layered for changing gallery climate. Pick: comfortable shoes, structured-but-soft layers, nothing restrictive. NOT: heels, statement loud jewelry, anything that screams.
+  • "Friend's wedding" (guest) → polished, joyful, weather-appropriate, NEVER white if the bride might be in white. Pick: dress or polished separates, dressy shoes, considered layer.
+  • "Casual day exploring [city]" → walking shoes, layers for café-to-street temp swings, nothing fussy. Pick: comfortable, easy, looks-like-she-belongs.
+
+The event name and notes outweigh season, weather, and time-of-day. Those refine — they don't override what kind of event you're dressing for.
+
+Catherine's available pieces (${items.length} items, pre-filtered by season + recency):
 ${JSON.stringify(items)}
 
-Create ONE outfit for this specific event. Return ONLY a JSON array containing exactly one object — no markdown, no explanation.
+Return ONE outfit as a JSON array containing exactly one object — no markdown, no extra prose.
 
 The outfit MUST have EXACTLY 4 slots:
   Standard: Top, Bottom, Shoes, Layer (outerwear OR accessory)
   Dress:    Dress, Shoes, Layer (outerwear), Accessory
 
+For EACH slot, provide:
+  - "item_id": your primary recommendation
+  - "alt_item_ids": exactly 2 alternative item_ids from the same category that would ALSO work for THIS event if Catherine wanted a different vibe in that slot. Alts are real picks you'd stand behind, not filler.
+
 [
   {
-    "name": "short evocative name (2–3 words)",
+    "name": "short evocative name (2-3 words)",
     "tag": "one occasion tag matching the event's energy",
-    "david_note": "8–15 words, specific about what's working for THIS event at THIS place at THIS time",
-    "closing_line": "one sentence, personal to Catherine, oriented toward the event",
+    "david_note": "8-15 words. Reference the EVENT specifically — the place, the type of evening, the activity. Not generic.",
+    "closing_line": "one sentence, personal to Catherine, oriented toward this event",
     "slots": [
-      { "label": "Top",    "item_id": "<uuid>" },
-      { "label": "Bottom", "item_id": "<uuid>" },
-      { "label": "Shoes",  "item_id": "<uuid>" },
-      { "label": "Layer",  "item_id": "<uuid>" }
+      { "label": "Top",    "item_id": "<uuid>", "alt_item_ids": ["<uuid>", "<uuid>"] },
+      { "label": "Bottom", "item_id": "<uuid>", "alt_item_ids": ["<uuid>", "<uuid>"] },
+      { "label": "Shoes",  "item_id": "<uuid>", "alt_item_ids": ["<uuid>", "<uuid>"] },
+      { "label": "Layer",  "item_id": "<uuid>", "alt_item_ids": ["<uuid>", "<uuid>"] }
     ]
   }
 ]
 
 Rules:
-- Every item_id must be a real uuid from the list above
+- Every item_id and every alt_item_ids entry must be a real uuid from the list above
+- Each alt_item_ids entry must be the SAME CATEGORY as that slot's primary (a Top's alts must also be tops)
+- No uuid may appear twice in this outfit (no primary equals its own alt; no alt repeats across slots)
 - Exactly 4 slots — pad with best available items if needed
-- Shoes (category: shoes) must appear
+- Shoes (category: shoes) must appear in every outfit
 - Pick weather-appropriate fabrics and layers
-- The david_note should reference the event, the place, the weather, or the time of day — not be generic`;
+- The david_note must specifically reference this event, not be generic`;
 
 // ── handler ───────────────────────────────────────────────────────────────────
 
@@ -213,10 +239,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     const candidates = buildCandidatePool(allItems, season);
     const condensed  = candidates.map(condenseForPrompt);
 
-    // 6. Call Claude — one outfit
+    // 6. Call Claude — one outfit, with David-curated alts per slot
     const msg = await anthropic.messages.create({
       model: "claude-haiku-4-5-20251001",
-      max_tokens: 600,
+      max_tokens: 1000,
       system: systemPrompt,
       messages: [{
         role: "user",
@@ -238,21 +264,43 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
     const claudeLooks = JSON.parse(jsonMatch[0]) as Array<{
       name: string; tag: string; david_note: string; closing_line: string;
-      slots: Array<{ label: string; item_id: string }>;
+      slots: Array<{ label: string; item_id: string; alt_item_ids?: string[] }>;
     }>;
     const cl = claudeLooks[0];
     if (!cl) throw new Error("Claude returned no look");
 
-    // 7. Resolve items + alts
+    // 7. Resolve items + David-curated alts (with rule-based padding if David undershoots)
     const candidateMap = new Map(candidates.map((r) => [r.id, r]));
     const usedIds      = new Set<string>();
     const slots: RealLookSlot[] = [];
+
+    function resolveAlts(primary: WardrobeRow, claudeAltIds: string[] | undefined): WardrobeRow[] {
+      const alts: WardrobeRow[] = [];
+      // David's curated picks first — validated for category + uniqueness
+      for (const altId of (claudeAltIds ?? []).slice(0, 3)) {
+        const altRow = candidateMap.get(altId);
+        if (!altRow) continue;                              // hallucinated id
+        if (altRow.category !== primary.category) continue; // wrong category
+        if (altRow.id === primary.id) continue;             // same as primary
+        if (alts.some((a) => a.id === altRow.id)) continue; // dup alt
+        if (usedIds.has(altRow.id)) continue;               // used elsewhere
+        alts.push(altRow);
+        if (alts.length === 2) break;
+      }
+      // Pad with rule-based alts if David gave fewer than 2
+      if (alts.length < 2) {
+        const exclude = new Set([...usedIds, primary.id, ...alts.map((a) => a.id)]);
+        const ruleBased = pickAlts(primary.category, exclude, allItems, 2 - alts.length);
+        alts.push(...ruleBased);
+      }
+      return alts;
+    }
 
     for (const s of (cl.slots ?? []).slice(0, 4)) {
       const row = candidateMap.get(s.item_id);
       if (!row || usedIds.has(row.id)) continue;
       usedIds.add(row.id);
-      const alts = pickAlts(row.category, usedIds, allItems, 2);
+      const alts = resolveAlts(row, s.alt_item_ids);
       alts.forEach((a) => usedIds.add(a.id));
       slots.push({
         slot: s.label,
@@ -275,7 +323,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         const fallback = allItems.find((r) => r.category === cat && !usedIds.has(r.id));
         if (!fallback) continue;
         usedIds.add(fallback.id);
-        const alts = pickAlts(fallback.category, usedIds, allItems, 2);
+        const alts = resolveAlts(fallback, undefined);
         alts.forEach((a) => usedIds.add(a.id));
         slots.push({
           slot: label,
@@ -287,8 +335,11 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
     if (slots.length < 3) throw new Error("Could not resolve enough slots");
 
-    // 8. Persist look (with trip_id) and event (with look_id)
+    // 8. Persist look (with trip_id) and event (with look_id).
+    //    slot_alts in stylist_raw is index-aligned with item_ids — frontend
+    //    uses it to populate the per-slot swap modal with curated picks.
     const itemIds = slots.map((s) => s.items[0].item_id);
+    const slotAlts = slots.map((s) => s.items.slice(1).map((it) => it.item_id));
     const { data: insertedLook, error: lookErr } = await supabase
       .from("looks")
       .insert({
@@ -300,7 +351,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         occasion:    occasion,
         date:        event_date,
         weather_ctx: weatherCtx,
-        stylist_raw: { david_note: cl.david_note, closing_line: cl.closing_line, season, time_of_day },
+        stylist_raw: {
+          david_note:   cl.david_note,
+          closing_line: cl.closing_line,
+          season,
+          time_of_day,
+          slot_alts:    slotAlts,
+        },
       })
       .select("id")
       .single();

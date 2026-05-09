@@ -34,7 +34,16 @@ type LookRow = {
   name: string;
   theme: string;
   item_ids: string[];
-  stylist_raw: { david_note?: string; closing_line?: string; season?: string; time_of_day?: string } | null;
+  stylist_raw: {
+    david_note?: string;
+    closing_line?: string;
+    season?: string;
+    time_of_day?: string;
+    /** Index-aligned with item_ids. Each entry is up to 2 alt uuids the Stylist
+     *  picked for that slot. Older looks may not have this — frontend falls
+     *  back to a same-category wardrobe sample. */
+    slot_alts?: string[][];
+  } | null;
 };
 
 type TripEvent = {
@@ -293,21 +302,24 @@ function AddEventForm({
 }
 
 // ─── Swap-item modal ──────────────────────────────────────────────────────────
+// Shows the 2-3 alternates David picked for this slot at generation time.
+// Tapping one swaps it in. Full wardrobe is intentionally NOT shown — keeps
+// suggestions curated. Older events without stored alts get a small
+// rule-based fallback (passed in as altItems) instead.
 
 function SwapItemModal({
   category,
-  currentItemId,
-  items,
+  altItems,
+  isFallback,
   onSelect,
   onClose,
 }: {
   category: string;
-  currentItemId: string;
-  items: WardrobeItem[];
+  altItems: WardrobeItem[];
+  isFallback: boolean;
   onSelect: (newItemId: string) => void;
   onClose: () => void;
 }) {
-  const candidates = items.filter((it) => it.category === category);
   return (
     <div
       onClick={onClose}
@@ -320,20 +332,29 @@ function SwapItemModal({
       <div
         onClick={(e) => e.stopPropagation()}
         style={{
-          width: "100%", maxWidth: 420, maxHeight: "80vh",
+          width: "100%", maxWidth: 420,
           background: "#faf7f2", borderTopLeftRadius: 16, borderTopRightRadius: 16,
           padding: "16px 16px max(16px, env(safe-area-inset-bottom))",
-          display: "flex", flexDirection: "column", gap: 12, overflow: "hidden",
+          display: "flex", flexDirection: "column", gap: 12,
         }}
       >
         <div className="flex justify-between items-center">
-          <p style={{
-            fontFamily: "var(--font-jost), sans-serif",
-            fontSize: 11, color: "#8a7a6a", letterSpacing: "0.08em",
-            fontWeight: 600, textTransform: "uppercase",
-          }}>
-            Swap {category}
-          </p>
+          <div>
+            <p style={{
+              fontFamily: "var(--font-jost), sans-serif",
+              fontSize: 11, color: "#8a7a6a", letterSpacing: "0.08em",
+              fontWeight: 600, textTransform: "uppercase",
+            }}>
+              Swap {category}
+            </p>
+            <p style={{
+              fontFamily: "var(--font-jost), sans-serif",
+              fontSize: 10.5, color: "#8a7a6a", fontStyle: "italic",
+              marginTop: 2,
+            }}>
+              {isFallback ? "Other options in your wardrobe" : "David's alternatives for this event"}
+            </p>
+          </div>
           <button
             onClick={onClose}
             aria-label="Close"
@@ -346,54 +367,32 @@ function SwapItemModal({
           </button>
         </div>
 
-        {candidates.length === 0 ? (
+        {altItems.length === 0 ? (
           <p style={{ fontFamily: "var(--font-jost), sans-serif", fontSize: 12.5, color: "#8a7a6a", textAlign: "center", padding: "20px 0" }}>
-            No other {category} in your wardrobe yet.
+            No other {category} available right now.
           </p>
         ) : (
-          <div className="overflow-y-auto no-scrollbar" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, paddingRight: 2 }}>
-            {candidates.map((item) => {
-              const isCurrent = item.id === currentItemId;
-              return (
-                <button
-                  key={item.id}
-                  onClick={() => !isCurrent && onSelect(item.id)}
-                  disabled={isCurrent}
-                  style={{
-                    aspectRatio: "1", padding: 0, borderRadius: 10, overflow: "hidden",
-                    background: "#f5f0e8",
-                    border: isCurrent
-                      ? "2px solid #c4a882"
-                      : "1px solid rgba(42,37,32,0.10)",
-                    cursor: isCurrent ? "default" : "pointer",
-                    position: "relative",
-                  }}
-                >
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={toThumbUrl(item.thumbnail_url ?? item.photo_url) ?? item.photo_url}
-                    alt={item.name ?? item.category}
-                    style={{ width: "100%", height: "100%", objectFit: "cover" }}
-                  />
-                  {isCurrent && (
-                    <div style={{
-                      position: "absolute", inset: 0,
-                      background: "rgba(196,168,130,0.18)",
-                      display: "flex", alignItems: "flex-end", justifyContent: "center",
-                      padding: 4,
-                    }}>
-                      <span style={{
-                        fontFamily: "var(--font-jost), sans-serif", fontSize: 9,
-                        fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase",
-                        color: "#2a2520", background: "#faf7f2", padding: "2px 6px", borderRadius: 4,
-                      }}>
-                        Current
-                      </span>
-                    </div>
-                  )}
-                </button>
-              );
-            })}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
+            {altItems.map((item) => (
+              <button
+                key={item.id}
+                onClick={() => onSelect(item.id)}
+                style={{
+                  aspectRatio: "1", padding: 0, borderRadius: 10, overflow: "hidden",
+                  background: "#f5f0e8",
+                  border: "1px solid rgba(42,37,32,0.10)",
+                  cursor: "pointer",
+                }}
+                aria-label={`Swap to ${item.name ?? item.category}`}
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={toThumbUrl(item.thumbnail_url ?? item.photo_url) ?? item.photo_url}
+                  alt={item.name ?? item.category}
+                  style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                />
+              </button>
+            ))}
           </div>
         )}
       </div>
@@ -592,6 +591,25 @@ function EventCard({
   // ── display mode ──
   const swappingItem = swapSlotIndex !== null ? lookItems[swapSlotIndex] : null;
 
+  // Resolve curated alts for the tapped slot. If the look has stored
+  // slot_alts (new events), use those. Otherwise fall back to a small
+  // rule-based same-category sample (older events created before alts
+  // were stored).
+  const swapAltItems = useMemo(() => {
+    if (swapSlotIndex === null || !swappingItem) return [];
+    const storedAltIds = event.look?.stylist_raw?.slot_alts?.[swapSlotIndex];
+    if (storedAltIds && storedAltIds.length > 0) {
+      return storedAltIds
+        .map((id) => itemMap.get(id))
+        .filter(Boolean) as WardrobeItem[];
+    }
+    return items
+      .filter((it) => it.category === swappingItem.category && it.id !== swappingItem.id)
+      .slice(0, 3);
+  }, [swapSlotIndex, swappingItem, event.look, itemMap, items]);
+
+  const swapIsFallback = swapSlotIndex !== null && !(event.look?.stylist_raw?.slot_alts?.[swapSlotIndex]?.length);
+
   return (
     <>
       <div style={{
@@ -732,8 +750,8 @@ function EventCard({
       {swappingItem && (
         <SwapItemModal
           category={swappingItem.category}
-          currentItemId={swappingItem.id}
-          items={items}
+          altItems={swapAltItems}
+          isFallback={swapIsFallback}
           onSelect={applySwap}
           onClose={() => setSwapSlotIndex(null)}
         />
