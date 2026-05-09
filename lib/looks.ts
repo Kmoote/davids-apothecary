@@ -1,5 +1,5 @@
 /**
- * Shared types and sessionStorage helpers for real generated looks.
+ * Shared types and browser-storage helpers for real generated looks.
  */
 
 // ── Image helpers ─────────────────────────────────────────────────────────────
@@ -47,7 +47,9 @@ export type RealLook = {
   slots: RealLookSlot[];
 };
 
-// ── sessionStorage cache ──────────────────────────────────────────────────────
+// ── Browser-storage cache ─────────────────────────────────────────────────────
+// Looks: localStorage (persists across launches; 8h TTL governs freshness)
+// Worn:  sessionStorage (intentionally per-tab — "today I'm wearing this")
 
 const LOOKS_KEY = "da_looks";
 const WORN_KEY  = "da_worn_look";
@@ -55,23 +57,23 @@ const CACHE_TTL = 8 * 60 * 60 * 1000; // 8 h
 
 export function cacheLooks(looks: RealLook[]): void {
   if (typeof window === "undefined") return;
-  sessionStorage.setItem(LOOKS_KEY, JSON.stringify({ ts: Date.now(), looks }));
+  localStorage.setItem(LOOKS_KEY, JSON.stringify({ ts: Date.now(), looks }));
 }
 
 export function getCachedLooks(): RealLook[] | null {
   if (typeof window === "undefined") return null;
   try {
-    const raw = sessionStorage.getItem(LOOKS_KEY);
+    const raw = localStorage.getItem(LOOKS_KEY);
     if (!raw) return null;
     const { ts, looks } = JSON.parse(raw);
-    if (Date.now() - ts > CACHE_TTL) { sessionStorage.removeItem(LOOKS_KEY); return null; }
+    if (Date.now() - ts > CACHE_TTL) { localStorage.removeItem(LOOKS_KEY); return null; }
     return looks as RealLook[];
   } catch { return null; }
 }
 
 export function invalidateLooks(): void {
   if (typeof window === "undefined") return;
-  sessionStorage.removeItem(LOOKS_KEY);
+  localStorage.removeItem(LOOKS_KEY);
 }
 
 export function cacheWornLook(look: RealLook): void {
