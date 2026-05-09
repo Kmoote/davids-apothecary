@@ -292,134 +292,453 @@ function AddEventForm({
   );
 }
 
+// ─── Swap-item modal ──────────────────────────────────────────────────────────
+
+function SwapItemModal({
+  category,
+  currentItemId,
+  items,
+  onSelect,
+  onClose,
+}: {
+  category: string;
+  currentItemId: string;
+  items: WardrobeItem[];
+  onSelect: (newItemId: string) => void;
+  onClose: () => void;
+}) {
+  const candidates = items.filter((it) => it.category === category);
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed", inset: 0, background: "rgba(42,37,32,0.55)",
+        display: "flex", alignItems: "flex-end", justifyContent: "center",
+        zIndex: 50,
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          width: "100%", maxWidth: 420, maxHeight: "80vh",
+          background: "#faf7f2", borderTopLeftRadius: 16, borderTopRightRadius: 16,
+          padding: "16px 16px max(16px, env(safe-area-inset-bottom))",
+          display: "flex", flexDirection: "column", gap: 12, overflow: "hidden",
+        }}
+      >
+        <div className="flex justify-between items-center">
+          <p style={{
+            fontFamily: "var(--font-jost), sans-serif",
+            fontSize: 11, color: "#8a7a6a", letterSpacing: "0.08em",
+            fontWeight: 600, textTransform: "uppercase",
+          }}>
+            Swap {category}
+          </p>
+          <button
+            onClick={onClose}
+            aria-label="Close"
+            style={{
+              background: "transparent", border: "none", color: "#2a2520",
+              fontSize: 20, cursor: "pointer", padding: "0 4px",
+            }}
+          >
+            ×
+          </button>
+        </div>
+
+        {candidates.length === 0 ? (
+          <p style={{ fontFamily: "var(--font-jost), sans-serif", fontSize: 12.5, color: "#8a7a6a", textAlign: "center", padding: "20px 0" }}>
+            No other {category} in your wardrobe yet.
+          </p>
+        ) : (
+          <div className="overflow-y-auto no-scrollbar" style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, paddingRight: 2 }}>
+            {candidates.map((item) => {
+              const isCurrent = item.id === currentItemId;
+              return (
+                <button
+                  key={item.id}
+                  onClick={() => !isCurrent && onSelect(item.id)}
+                  disabled={isCurrent}
+                  style={{
+                    aspectRatio: "1", padding: 0, borderRadius: 10, overflow: "hidden",
+                    background: "#f5f0e8",
+                    border: isCurrent
+                      ? "2px solid #c4a882"
+                      : "1px solid rgba(42,37,32,0.10)",
+                    cursor: isCurrent ? "default" : "pointer",
+                    position: "relative",
+                  }}
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={toThumbUrl(item.thumbnail_url ?? item.photo_url) ?? item.photo_url}
+                    alt={item.name ?? item.category}
+                    style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                  />
+                  {isCurrent && (
+                    <div style={{
+                      position: "absolute", inset: 0,
+                      background: "rgba(196,168,130,0.18)",
+                      display: "flex", alignItems: "flex-end", justifyContent: "center",
+                      padding: 4,
+                    }}>
+                      <span style={{
+                        fontFamily: "var(--font-jost), sans-serif", fontSize: 9,
+                        fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase",
+                        color: "#2a2520", background: "#faf7f2", padding: "2px 6px", borderRadius: 4,
+                      }}>
+                        Current
+                      </span>
+                    </div>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── Event card ───────────────────────────────────────────────────────────────
 
 function EventCard({
   event,
+  items,
   itemMap,
+  tripStart,
+  tripEnd,
+  onChanged,
   onDelete,
 }: {
   event: TripEvent;
+  items: WardrobeItem[];
   itemMap: Map<string, WardrobeItem>;
+  tripStart: string;
+  tripEnd: string;
+  onChanged: () => void;
   onDelete: (eventId: string) => void;
 }) {
-  const items = (event.look?.item_ids ?? []).map((id) => itemMap.get(id)).filter(Boolean) as WardrobeItem[];
+  const [isEditing, setIsEditing]       = useState(false);
+  const [swapSlotIndex, setSwapSlotIndex] = useState<number | null>(null);
+  const [editDate, setEditDate]         = useState(event.event_date);
+  const [editTimeOfDay, setEditTimeOfDay] = useState<TripEvent["time_of_day"]>(event.time_of_day);
+  const [editOccasion, setEditOccasion] = useState(event.occasion);
+  const [editNotes, setEditNotes]       = useState(event.notes ?? "");
+  const [saving, setSaving]             = useState(false);
+  const [editError, setEditError]       = useState<string | null>(null);
+
+  const lookItems = (event.look?.item_ids ?? []).map((id) => itemMap.get(id)).filter(Boolean) as WardrobeItem[];
   const davidNote = event.look?.stylist_raw?.david_note ?? "";
 
-  return (
-    <div style={{
-      background: "#faf7f2",
-      borderRadius: 14,
-      border: "1px solid rgba(42,37,32,0.10)",
-      padding: 14,
-      display: "flex",
-      flexDirection: "column",
-      gap: 10,
-    }}>
-      {/* Date + time + occasion */}
-      <div className="flex justify-between items-start gap-2">
-        <div>
-          <p style={{
-            fontFamily: "var(--font-jost), sans-serif",
-            fontSize: 10,
-            color: "#c4a882",
-            letterSpacing: "0.08em",
-            fontWeight: 600,
-            textTransform: "uppercase",
-          }}>
-            {fmtDate(event.event_date)} · {TIME_OF_DAY_LABELS[event.time_of_day]}
-          </p>
-          <p style={{
-            fontFamily: "var(--font-playfair), serif",
-            fontStyle: "italic",
-            fontSize: 17,
-            color: "#2a2520",
-            fontWeight: 600,
-            marginTop: 2,
-          }}>
-            {event.occasion}
-          </p>
-        </div>
-        <button
-          onClick={() => onDelete(event.id)}
-          aria-label="Delete event"
-          style={{
-            background: "transparent",
-            border: "none",
-            color: "#8a7a6a",
-            fontSize: 16,
-            cursor: "pointer",
-            padding: "2px 6px",
-          }}
-        >
-          ×
-        </button>
-      </div>
+  function startEdit() {
+    setEditDate(event.event_date);
+    setEditTimeOfDay(event.time_of_day);
+    setEditOccasion(event.occasion);
+    setEditNotes(event.notes ?? "");
+    setEditError(null);
+    setIsEditing(true);
+  }
 
-      {/* Weather chip */}
-      {event.weather_ctx?.summary && (
+  async function saveEdit() {
+    if (!editOccasion.trim() || saving) return;
+    setSaving(true);
+    setEditError(null);
+    try {
+      const { error } = await supabase
+        .from("trip_events")
+        .update({
+          event_date:  editDate,
+          time_of_day: editTimeOfDay,
+          occasion:    editOccasion.trim(),
+          notes:       editNotes.trim() || null,
+        })
+        .eq("id", event.id)
+        .eq("user_id", CATHERINE_USER_ID);
+      if (error) throw new Error(error.message);
+      setIsEditing(false);
+      onChanged();
+    } catch (err) {
+      setEditError(err instanceof Error ? err.message : "Failed to save");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function applySwap(newItemId: string) {
+    if (swapSlotIndex == null || !event.look) return;
+    const newIds = [...event.look.item_ids];
+    newIds[swapSlotIndex] = newItemId;
+    try {
+      const { error } = await supabase
+        .from("looks")
+        .update({ item_ids: newIds })
+        .eq("id", event.look.id)
+        .eq("user_id", CATHERINE_USER_ID);
+      if (error) throw new Error(error.message);
+      setSwapSlotIndex(null);
+      onChanged();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to swap");
+    }
+  }
+
+  // ── edit mode ──
+  if (isEditing) {
+    return (
+      <div style={{
+        background: "#faf7f2",
+        borderRadius: 14,
+        border: "1px solid rgba(196,168,130,0.5)",
+        padding: 14,
+        display: "flex",
+        flexDirection: "column",
+        gap: 12,
+      }}>
         <p style={{
           fontFamily: "var(--font-jost), sans-serif",
-          fontSize: 10.5,
-          color: "#8a7a6a",
-          fontStyle: "italic",
-          lineHeight: 1.4,
+          fontSize: 10, color: "#c4a882", letterSpacing: "0.08em",
+          fontWeight: 600, textTransform: "uppercase",
         }}>
-          {event.weather_ctx.summary}
+          Edit event
         </p>
-      )}
 
-      {/* Outfit thumbnails */}
-      {items.length > 0 ? (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 6 }}>
-          {items.slice(0, 4).map((item) => (
-            <div
-              key={item.id}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+          <div>
+            <p style={fieldLabelStyle}>Date</p>
+            <input
+              type="date"
+              value={editDate}
+              min={tripStart}
+              max={tripEnd}
+              onChange={(e) => setEditDate(e.target.value)}
+              style={{ ...inputStyle, background: "#fff" }}
+            />
+          </div>
+          <div>
+            <p style={fieldLabelStyle}>Time of day</p>
+            <select
+              value={editTimeOfDay}
+              onChange={(e) => setEditTimeOfDay(e.target.value as TripEvent["time_of_day"])}
+              style={{ ...inputStyle, background: "#fff" }}
+            >
+              <option value="morning">Morning</option>
+              <option value="day">Day</option>
+              <option value="evening">Evening</option>
+              <option value="night">Night</option>
+            </select>
+          </div>
+        </div>
+
+        <div>
+          <p style={fieldLabelStyle}>Event</p>
+          <input
+            type="text"
+            value={editOccasion}
+            onChange={(e) => setEditOccasion(e.target.value)}
+            style={{ ...inputStyle, background: "#fff" }}
+          />
+        </div>
+
+        <div>
+          <p style={fieldLabelStyle}>Notes (optional)</p>
+          <textarea
+            value={editNotes}
+            onChange={(e) => setEditNotes(e.target.value)}
+            rows={2}
+            style={{ ...inputStyle, background: "#fff", resize: "none" }}
+          />
+        </div>
+
+        {editError && (
+          <div style={{ fontFamily: "var(--font-jost), sans-serif", fontSize: 11, color: "#7a2a2a" }}>
+            {editError}
+          </div>
+        )}
+
+        <div className="flex gap-2">
+          <button
+            onClick={() => { setIsEditing(false); setEditError(null); }}
+            disabled={saving}
+            style={{
+              flex: 1, padding: "10px 0", borderRadius: 12,
+              background: "transparent", color: "#2a2520",
+              fontFamily: "var(--font-jost), sans-serif", fontSize: 12, fontWeight: 500,
+              border: "1px solid rgba(42,37,32,0.2)", cursor: "pointer",
+            }}
+          >
+            Cancel
+          </button>
+          <button
+            onClick={saveEdit}
+            disabled={!editOccasion.trim() || saving}
+            style={{
+              flex: 2, padding: "10px 0", borderRadius: 12,
+              background: !editOccasion.trim() ? "rgba(42,37,32,0.4)" : "#2a2520",
+              color: "#c4a882",
+              fontFamily: "var(--font-jost), sans-serif", fontSize: 12, fontWeight: 600,
+              border: "none",
+              cursor: !editOccasion.trim() || saving ? "not-allowed" : "pointer",
+            }}
+          >
+            {saving ? "Saving…" : "Save changes"}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // ── display mode ──
+  const swappingItem = swapSlotIndex !== null ? lookItems[swapSlotIndex] : null;
+
+  return (
+    <>
+      <div style={{
+        background: "#faf7f2",
+        borderRadius: 14,
+        border: "1px solid rgba(42,37,32,0.10)",
+        padding: 14,
+        display: "flex",
+        flexDirection: "column",
+        gap: 10,
+      }}>
+        {/* Date + time + occasion */}
+        <div className="flex justify-between items-start gap-2">
+          <div>
+            <p style={{
+              fontFamily: "var(--font-jost), sans-serif",
+              fontSize: 10,
+              color: "#c4a882",
+              letterSpacing: "0.08em",
+              fontWeight: 600,
+              textTransform: "uppercase",
+            }}>
+              {fmtDate(event.event_date)} · {TIME_OF_DAY_LABELS[event.time_of_day]}
+            </p>
+            <p style={{
+              fontFamily: "var(--font-playfair), serif",
+              fontStyle: "italic",
+              fontSize: 17,
+              color: "#2a2520",
+              fontWeight: 600,
+              marginTop: 2,
+            }}>
+              {event.occasion}
+            </p>
+          </div>
+          <div className="flex items-start gap-1">
+            <button
+              onClick={startEdit}
+              aria-label="Edit event"
               style={{
-                aspectRatio: "1",
-                borderRadius: 8,
-                overflow: "hidden",
-                background: "#f5f0e8",
-                border: "1px solid rgba(42,37,32,0.08)",
+                background: "transparent",
+                border: "none",
+                color: "#8a7a6a",
+                fontSize: 14,
+                cursor: "pointer",
+                padding: "2px 6px",
               }}
             >
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={toThumbUrl(item.thumbnail_url ?? item.photo_url) ?? item.photo_url}
-                alt={item.name ?? item.category}
-                style={{ width: "100%", height: "100%", objectFit: "cover" }}
-              />
-            </div>
-          ))}
+              ✎
+            </button>
+            <button
+              onClick={() => onDelete(event.id)}
+              aria-label="Delete event"
+              style={{
+                background: "transparent",
+                border: "none",
+                color: "#8a7a6a",
+                fontSize: 16,
+                cursor: "pointer",
+                padding: "2px 6px",
+              }}
+            >
+              ×
+            </button>
+          </div>
         </div>
-      ) : (
-        <p style={{
-          fontFamily: "var(--font-jost), sans-serif",
-          fontSize: 12,
-          color: "#8a7a6a",
-          fontStyle: "italic",
-          textAlign: "center",
-          padding: "12px 0",
-        }}>
-          No outfit yet — David is thinking…
-        </p>
-      )}
 
-      {/* David's note */}
-      {davidNote && (
-        <p style={{
-          fontFamily: "var(--font-jost), sans-serif",
-          fontSize: 12.5,
-          color: "#2a2520",
-          fontStyle: "italic",
-          lineHeight: 1.5,
-          paddingTop: 4,
-          borderTop: "1px solid rgba(42,37,32,0.08)",
-        }}>
-          “{davidNote}”
-        </p>
+        {/* Weather chip */}
+        {event.weather_ctx?.summary && (
+          <p style={{
+            fontFamily: "var(--font-jost), sans-serif",
+            fontSize: 10.5,
+            color: "#8a7a6a",
+            fontStyle: "italic",
+            lineHeight: 1.4,
+          }}>
+            {event.weather_ctx.summary}
+          </p>
+        )}
+
+        {/* Outfit thumbnails (each clickable to swap) */}
+        {lookItems.length > 0 ? (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 6 }}>
+            {lookItems.slice(0, 4).map((item, i) => (
+              <button
+                key={`${item.id}-${i}`}
+                onClick={() => setSwapSlotIndex(i)}
+                aria-label={`Swap ${item.category}`}
+                style={{
+                  aspectRatio: "1",
+                  borderRadius: 8,
+                  overflow: "hidden",
+                  background: "#f5f0e8",
+                  border: "1px solid rgba(42,37,32,0.08)",
+                  padding: 0,
+                  cursor: "pointer",
+                  position: "relative",
+                }}
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={toThumbUrl(item.thumbnail_url ?? item.photo_url) ?? item.photo_url}
+                  alt={item.name ?? item.category}
+                  style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                />
+              </button>
+            ))}
+          </div>
+        ) : (
+          <p style={{
+            fontFamily: "var(--font-jost), sans-serif",
+            fontSize: 12,
+            color: "#8a7a6a",
+            fontStyle: "italic",
+            textAlign: "center",
+            padding: "12px 0",
+          }}>
+            No outfit yet — David is thinking…
+          </p>
+        )}
+
+        {/* David's note */}
+        {davidNote && (
+          <p style={{
+            fontFamily: "var(--font-jost), sans-serif",
+            fontSize: 12.5,
+            color: "#2a2520",
+            fontStyle: "italic",
+            lineHeight: 1.5,
+            paddingTop: 4,
+            borderTop: "1px solid rgba(42,37,32,0.08)",
+          }}>
+            “{davidNote}”
+          </p>
+        )}
+      </div>
+
+      {swappingItem && (
+        <SwapItemModal
+          category={swappingItem.category}
+          currentItemId={swappingItem.id}
+          items={items}
+          onSelect={applySwap}
+          onClose={() => setSwapSlotIndex(null)}
+        />
       )}
-    </div>
+    </>
   );
 }
 
@@ -655,9 +974,6 @@ export default function TripDetailPage() {
           </div>
         ) : trip ? (
           <>
-            {/* Packing list */}
-            <PackingList events={events} itemMap={itemMap} />
-
             {/* Events */}
             <section>
               <p style={labelStyle}>Events · {events.length}</p>
@@ -666,7 +982,11 @@ export default function TripDetailPage() {
                   <EventCard
                     key={ev.id}
                     event={ev}
+                    items={items}
                     itemMap={itemMap}
+                    tripStart={trip.start_date}
+                    tripEnd={trip.end_date}
+                    onChanged={reload}
                     onDelete={handleDeleteEvent}
                   />
                 ))}
@@ -678,6 +998,9 @@ export default function TripDetailPage() {
                 />
               </div>
             </section>
+
+            {/* Packing list */}
+            <PackingList events={events} itemMap={itemMap} />
           </>
         ) : null}
       </div>
