@@ -216,7 +216,7 @@ export default function MorningPage() {
 
         {/* secondary CTA */}
         <Link
-          href="/chat"
+          href="/trips"
           className="fade-up flex items-center justify-center"
           style={{
             animationDelay: "320ms", border: "1.5px dashed rgba(42,37,32,0.25)",

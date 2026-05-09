@@ -470,12 +470,13 @@ function EventCard({
     const newIds = [...event.look.item_ids];
     newIds[swapSlotIndex] = newItemId;
     try {
-      const { error } = await supabase
-        .from("looks")
-        .update({ item_ids: newIds })
-        .eq("id", event.look.id)
-        .eq("user_id", CATHERINE_USER_ID);
-      if (error) throw new Error(error.message);
+      const res = await fetch(`/api/looks/${event.look.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ item_ids: newIds }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error ?? `Swap failed (${res.status})`);
       setSwapSlotIndex(null);
       onChanged();
     } catch (err) {
