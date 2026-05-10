@@ -219,6 +219,14 @@ function buildPrefSummary(prefs: UserPrefs | null): string {
   // Corrections (existing)
   if (prefs.corrections?.length) lines.push(`Rules from Catherine: ${prefs.corrections.join("; ")}.`);
 
+  // Recent learnings — David's accumulated observations. Capped at last 5.
+  if (prefs.recent_learnings?.length) {
+    const recent = prefs.recent_learnings.slice(-5).reverse().map((l) => l.text).filter(Boolean);
+    if (recent.length) {
+      lines.push(`What David has learned about Catherine recently: ${recent.join("; ")}.`);
+    }
+  }
+
   return lines.join("\n");
 }
 
@@ -275,12 +283,27 @@ type WardrobeRow = {
   formality: number; season_fit: string[];
   pattern: string | null; fabric: string | null;
   last_worn_at: string | null;
+  fit_note: string | null;
+  wear_count: number;
+  pass_count: number;
 };
+
+/**
+ * Items Catherine has consistently rejected. Not dropped — David may still
+ * feature them with the right framing — but pushed to the back of the queue
+ * so fresher items surface first.
+ *
+ * Threshold: passed 3+ times and never picked.
+ */
+function isFatigued(r: WardrobeRow): boolean {
+  return (r.pass_count ?? 0) >= 3 && (r.wear_count ?? 0) === 0;
+}
 
 /**
  * Build the candidate pool Claude reasons over.
  * - Season-appropriate items come first (empty season_fit = all-season, always included)
- * - Within each category, sorted by least-recently-worn (nulls = never worn = top priority)
+ * - Fatigued items (passed 3+ times, never worn) are demoted to the back of their category
+ * - Among the rest, sorted by least-recently-worn (nulls = never worn = top priority)
  * - Capped per category so total stays ~35–40 items regardless of wardrobe size
  * - Falls back to off-season items if a category is short on season-appropriate pieces
  */
@@ -290,8 +313,13 @@ function buildCandidatePool(all: WardrobeRow[], season: string): WardrobeRow[] {
   for (const [cat, limit] of Object.entries(CATEGORY_LIMITS)) {
     const inCat = all.filter((r) => r.category === cat);
 
-    // Sort: never worn first, then least-recently-worn
     inCat.sort((a, b) => {
+      // Fatigued items go last regardless of recency
+      const aFat = isFatigued(a);
+      const bFat = isFatigued(b);
+      if (aFat !== bFat) return aFat ? 1 : -1;
+
+      // Within same fatigue bucket, oldest-worn first (nulls = highest priority)
       if (!a.last_worn_at && !b.last_worn_at) return 0;
       if (!a.last_worn_at) return -1;
       if (!b.last_worn_at) return 1;
@@ -344,7 +372,7 @@ export async function GET() {
     //    The order here feeds both the candidate filter AND the alt pool.
     const { data: rows, error: dbErr } = await supabase
       .from("wardrobe_items")
-      .select("id,name,category,subcategory,photo_url,thumbnail_url,colors,occasion_tags,formality,season_fit,pattern,fabric,last_worn_at")
+      .select("id,name,category,subcategory,photo_url,thumbnail_url,colors,occasion_tags,formality,season_fit,pattern,fabric,last_worn_at,fit_note,wear_count,pass_count")
       .eq("user_id", CATHERINE_USER_ID)
       .eq("is_active", true)
       .order("last_worn_at", { ascending: true, nullsFirst: true });
@@ -371,7 +399,8 @@ export async function GET() {
     // 3. Build the ~35–40 item candidate pool (constant size as wardrobe grows)
     const candidates = buildCandidatePool(allItems, season);
 
-    // 4. Condensed payload for Claude — metadata only, no photo URLs
+    // 4. Condensed payload for Claude — metadata only, no photo URLs.
+    //    fit_note is included so David sees per-item fit problems Catherine has flagged.
     const condensed = candidates.map((r) => ({
       id:           r.id,
       name:         r.name ?? r.category,
@@ -383,6 +412,7 @@ export async function GET() {
       season_fit:   r.season_fit,
       pattern:      r.pattern,
       fabric:       r.fabric,
+      fit_note:     r.fit_note ?? undefined,
     }));
 
     // 5. Call Claude with the focused candidate pool + Catherine's preferences

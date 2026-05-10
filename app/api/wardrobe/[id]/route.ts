@@ -9,6 +9,7 @@ const supabase = createClient(
 const ALLOWED_FIELDS = [
   "name", "category", "subcategory", "occasion_tags",
   "season_fit", "formality", "pattern", "fabric", "brand", "size",
+  "fit_note",
 ];
 
 export async function PATCH(

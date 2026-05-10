@@ -208,10 +208,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       time_of_day
     );
 
-    // 3. Fetch wardrobe (active items only)
+    // 3. Fetch wardrobe (active items only). wear_count + pass_count fuel the
+    //    fatigue demotion in buildCandidatePool — items consistently rejected
+    //    by Catherine drift to the back of the queue.
     const { data: rows, error: dbErr } = await supabase
       .from("wardrobe_items")
-      .select("id,name,category,subcategory,photo_url,thumbnail_url,colors,occasion_tags,formality,season_fit,pattern,fabric,last_worn_at,fit_note")
+      .select("id,name,category,subcategory,photo_url,thumbnail_url,colors,occasion_tags,formality,season_fit,pattern,fabric,last_worn_at,fit_note,wear_count,pass_count")
       .eq("user_id", CATHERINE_USER_ID)
       .eq("is_active", true)
       .order("last_worn_at", { ascending: true, nullsFirst: true });

@@ -271,6 +271,10 @@ export default function ProfilePage() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
 
+  // Phase A1b — refresh-learnings state
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshMessage, setRefreshMessage] = useState<string | null>(null);
+
   useEffect(() => {
     async function load() {
       const { data } = await supabase
@@ -374,6 +378,35 @@ export default function ProfilePage() {
       setPrefs(draft);
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
+    }
+  };
+
+  // Phase A1b — manual reflection trigger
+  const handleRefreshLearnings = async () => {
+    if (!draft) return;
+    setRefreshing(true);
+    setRefreshMessage(null);
+    try {
+      const res = await fetch("/api/refresh-learnings", { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Refresh failed");
+
+      const newLearnings = (data.learnings ?? []) as { text: string; date?: string }[];
+      if (newLearnings.length === 0) {
+        setRefreshMessage(data.message ?? "Nothing new to learn yet.");
+      } else {
+        // Append + cap at last 10 client-side to mirror server behavior
+        const combined = [...(draft.recent_learnings ?? []), ...newLearnings].slice(-10);
+        const updated = { ...draft, recent_learnings: combined };
+        setDraft(updated);
+        setPrefs(updated); // server already wrote, so prefs and draft stay in sync
+        setRefreshMessage(`David noted ${newLearnings.length} new ${newLearnings.length === 1 ? "thing" : "things"}.`);
+        setTimeout(() => setRefreshMessage(null), 4000);
+      }
+    } catch (e) {
+      setRefreshMessage(e instanceof Error ? e.message : "Something went wrong.");
+    } finally {
+      setRefreshing(false);
     }
   };
 
@@ -676,12 +709,13 @@ export default function ProfilePage() {
               </section>
             )}
 
-            {/* Learnings */}
-            {draft.recent_learnings?.length > 0 && (
-              <section>
-                <p style={labelStyle}>Recent Learnings</p>
-                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                  {draft.recent_learnings.map((l, i) => (
+            {/* Learnings — always shown; includes refresh button */}
+            <section>
+              <p style={labelStyle}>What David Has Learned</p>
+
+              {draft.recent_learnings?.length > 0 ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 10 }}>
+                  {draft.recent_learnings.slice(-5).reverse().map((l, i) => (
                     <div
                       key={i}
                       style={{ borderLeft: "2.5px solid #c4a882", paddingLeft: 10 }}
@@ -689,11 +723,53 @@ export default function ProfilePage() {
                       <p style={{ fontFamily: "var(--font-jost), sans-serif", fontSize: 13, color: "#2a2520", lineHeight: 1.5 }}>
                         {typeof l === "string" ? l : l.text}
                       </p>
+                      {typeof l !== "string" && l.date && (
+                        <p style={{ fontFamily: "var(--font-jost), sans-serif", fontSize: 9.5, color: "#8a7a6a", marginTop: 2, letterSpacing: "0.04em" }}>
+                          {l.date}
+                        </p>
+                      )}
                     </div>
                   ))}
                 </div>
-              </section>
-            )}
+              ) : (
+                <p style={{
+                  fontFamily: "var(--font-jost), sans-serif", fontSize: 12,
+                  color: "#8a7a6a", lineHeight: 1.5, marginBottom: 10, fontStyle: "italic",
+                }}>
+                  Nothing yet. David picks up patterns as you wear and pass on outfits.
+                </p>
+              )}
+
+              <button
+                onClick={handleRefreshLearnings}
+                disabled={refreshing}
+                style={{
+                  width: "100%",
+                  padding: "10px 0",
+                  borderRadius: 12,
+                  background: "transparent",
+                  color: "#2a2520",
+                  border: "1px solid rgba(42,37,32,0.2)",
+                  fontFamily: "var(--font-jost), sans-serif",
+                  fontSize: 12,
+                  fontWeight: 500,
+                  letterSpacing: "0.04em",
+                  cursor: refreshing ? "wait" : "pointer",
+                  transition: "background 0.15s",
+                }}
+              >
+                {refreshing ? "David is thinking…" : "Refresh David's Learnings"}
+              </button>
+
+              {refreshMessage && (
+                <p style={{
+                  fontFamily: "var(--font-jost), sans-serif", fontSize: 11,
+                  color: "#8a7a6a", textAlign: "center", marginTop: 8, lineHeight: 1.4,
+                }}>
+                  {refreshMessage}
+                </p>
+              )}
+            </section>
 
             {/* Save button — only visible when dirty */}
             {isDirty && (

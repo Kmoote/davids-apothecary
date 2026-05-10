@@ -23,6 +23,7 @@ type WardrobeItem = {
   photo_url: string;
   thumbnail_url: string | null;
   david_note: string | null;
+  fit_note: string | null;
 };
 
 const CATEGORIES = ["All", "Tops", "Bottoms", "Outerwear", "Shoes", "Accessories", "Dresses"];
@@ -55,6 +56,7 @@ type EditState = {
   formality: number;
   pattern: string;
   fabric: string;
+  fit_note: string;
 };
 
 function EditSheet({
@@ -76,6 +78,7 @@ function EditSheet({
     formality:     item.formality ?? 2,
     pattern:       item.pattern ?? "",
     fabric:        item.fabric ?? "",
+    fit_note:      item.fit_note ?? "",
   });
   const [saving, setSaving] = useState(false);
   const [error, setError]   = useState<string | null>(null);
@@ -113,6 +116,7 @@ function EditSheet({
         formality:     form.formality,
         pattern:       form.pattern.trim() || null,
         fabric:        form.fabric.trim() || null,
+        fit_note:      form.fit_note.trim() || null,
       };
 
       const res = await fetch(`/api/wardrobe/${item.id}`, {
@@ -375,7 +379,7 @@ function EditSheet({
             </div>
           </div>
 
-          <div style={{ marginBottom: 28 }}>
+          <div style={{ marginBottom: 20 }}>
             <label style={label}>Fabric</label>
             <input
               style={input}
@@ -383,6 +387,24 @@ function EditSheet({
               placeholder="e.g. cotton, silk, linen..."
               onChange={(e) => setForm((f) => ({ ...f, fabric: e.target.value }))}
             />
+          </div>
+
+          {/* Fit note — what's off about this piece, for David */}
+          <div style={{ marginBottom: 28 }}>
+            <label style={label}>Anything off about this piece?</label>
+            <textarea
+              style={{ ...input, resize: "none", lineHeight: 1.5, minHeight: 70 }}
+              value={form.fit_note}
+              placeholder="e.g. neckline cuts weird, fabric is too sheer, never know what to pair this with…"
+              rows={3}
+              onChange={(e) => setForm((f) => ({ ...f, fit_note: e.target.value }))}
+            />
+            <p style={{
+              fontFamily: "var(--font-jost), sans-serif", fontSize: 10,
+              color: "#8a7a6a", marginTop: 5, lineHeight: 1.4,
+            }}>
+              David reads this every time he considers this piece. Optional — leave blank if it works fine.
+            </p>
           </div>
 
         </div>
@@ -501,7 +523,7 @@ export default function WardrobePage() {
     async function load() {
       const { data } = await supabase
         .from("wardrobe_items")
-        .select("id,name,brand,size,category,subcategory,colors,occasion_tags,season_fit,formality,pattern,fabric,wear_count,last_worn_at,photo_url,thumbnail_url,david_note")
+        .select("id,name,brand,size,category,subcategory,colors,occasion_tags,season_fit,formality,pattern,fabric,wear_count,last_worn_at,photo_url,thumbnail_url,david_note,fit_note")
         .eq("user_id", CATHERINE_USER_ID)
         .eq("is_active", true)
         .order("last_worn_at", { ascending: true, nullsFirst: false });

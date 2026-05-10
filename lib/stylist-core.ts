@@ -227,6 +227,15 @@ export function buildPrefSummary(prefs: UserPrefs | null): string {
   // Corrections
   if (prefs.corrections?.length) lines.push(`Rules from Catherine: ${prefs.corrections.join("; ")}.`);
 
+  // Recent learnings — David's accumulated observations from her swipes/picks.
+  // Capped at the last 5 to keep context tight. Render most-recent first.
+  if (prefs.recent_learnings?.length) {
+    const recent = prefs.recent_learnings.slice(-5).reverse().map((l) => l.text).filter(Boolean);
+    if (recent.length) {
+      lines.push(`What David has learned about Catherine recently: ${recent.join("; ")}.`);
+    }
+  }
+
   return lines.join("\n");
 }
 
@@ -247,12 +256,28 @@ export type WardrobeRow = {
   fabric: string | null;
   last_worn_at: string | null;
   fit_note?: string | null;
+  wear_count?: number;
+  pass_count?: number;
 };
+
+/**
+ * Items Catherine has consistently rejected. We don't drop them — David
+ * may still feature them with the right framing — but they get pushed to
+ * the back of the candidate queue so fresh items surface first.
+ *
+ * Threshold: passed 3+ times and never picked. Cheap, deterministic.
+ */
+function isFatigued(r: WardrobeRow): boolean {
+  const passes = r.pass_count ?? 0;
+  const wears  = r.wear_count ?? 0;
+  return passes >= 3 && wears === 0;
+}
 
 /**
  * Build the candidate pool Claude reasons over.
  * - Season-appropriate items first (empty season_fit = all-season, always included)
- * - Within each category, sorted by least-recently-worn (nulls = top priority)
+ * - Within each category, fatigued items (passed 3+ times, never worn) are demoted to the back
+ * - Among the rest, sorted by least-recently-worn (nulls = top priority)
  * - Capped per category so total stays ~35–40 items regardless of wardrobe size
  * - Falls back to off-season items if a category is short on season-appropriate pieces
  */
@@ -263,6 +288,12 @@ export function buildCandidatePool(all: WardrobeRow[], season: string): Wardrobe
     const inCat = all.filter((r) => r.category === cat);
 
     inCat.sort((a, b) => {
+      // Fatigued items go last regardless of recency.
+      const aFat = isFatigued(a);
+      const bFat = isFatigued(b);
+      if (aFat !== bFat) return aFat ? 1 : -1;
+
+      // Within same fatigue bucket, oldest-worn first (nulls = highest priority).
       if (!a.last_worn_at && !b.last_worn_at) return 0;
       if (!a.last_worn_at) return -1;
       if (!b.last_worn_at) return 1;
