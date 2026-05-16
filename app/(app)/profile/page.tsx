@@ -437,15 +437,23 @@ export default function ProfilePage() {
           </div>
         ) : draft ? (
           <>
-            {/* How David sees you */}
+            {/* How David sees you — pulls the most recent learning from David */}
             <section>
               <p style={labelStyle}>How David Sees You</p>
               <div className="flex gap-2.5 items-start">
                 <DavidAvatar />
                 <div style={{ flex: 1, background: "#f5f0e8", border: "1px solid rgba(42,37,32,0.14)", borderRadius: "3px 14px 14px 14px", padding: "10px 14px" }}>
-                  <p style={{ fontFamily: "var(--font-jost), sans-serif", fontSize: 13, color: "#2a2520", lineHeight: 1.6, fontStyle: "italic" }}>
-                    {draft.notes_freetext ?? "Quietly confident. You know what works — sometimes you just need a nudge to actually wear it."}
-                  </p>
+                  {(() => {
+                    const latest = draft.recent_learnings?.[draft.recent_learnings.length - 1];
+                    const latestText = latest
+                      ? (typeof latest === "string" ? latest : latest.text)
+                      : null;
+                    return (
+                      <p style={{ fontFamily: "var(--font-jost), sans-serif", fontSize: 13, color: latestText ? "#2a2520" : "#8a7a6a", lineHeight: 1.6, fontStyle: "italic" }}>
+                        {latestText ?? "David is still getting to know you. Wear and pass a few looks — patterns will show up here."}
+                      </p>
+                    );
+                  })()}
                 </div>
               </div>
             </section>
