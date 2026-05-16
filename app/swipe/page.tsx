@@ -9,6 +9,7 @@ import {
   getCachedLooks,
   cacheLooks,
   cacheWornLook,
+  toThumbUrl,
 } from "@/lib/looks";
 
 const CARD_THRESHOLD = 100;
@@ -100,7 +101,7 @@ function SwipeableItem({
       {/* photo */}
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
-        src={item.thumbnail_url ?? item.photo_url}
+        src={toThumbUrl(item.photo_url, 600) ?? item.thumbnail_url ?? item.photo_url}
         alt={item.name}
         draggable={false}
         className="absolute inset-0 w-full h-full object-cover"
@@ -435,7 +436,7 @@ function SwipePageInner() {
                 }}>
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
-                    src={slot.items[0]?.thumbnail_url ?? slot.items[0]?.photo_url}
+                    src={toThumbUrl(slot.items[0]?.photo_url, 400) ?? slot.items[0]?.thumbnail_url ?? slot.items[0]?.photo_url}
                     alt=""
                     draggable={false}
                     className="absolute inset-0 w-full h-full object-cover"
