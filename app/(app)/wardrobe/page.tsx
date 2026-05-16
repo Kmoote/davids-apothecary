@@ -82,6 +82,8 @@ function EditSheet({
   });
   const [saving, setSaving] = useState(false);
   const [error, setError]   = useState<string | null>(null);
+  const [retagging, setRetagging] = useState(false);
+  const [retagMessage, setRetagMessage] = useState<string | null>(null);
   const sheetRef = useRef<HTMLDivElement>(null);
 
   // Prevent background scroll while sheet is open
@@ -100,6 +102,50 @@ function EditSheet({
           : [...current, value],
       };
     });
+  }
+
+  async function handleRetag() {
+    if (retagging) return;
+    if (!confirm("Re-tag this piece? David will re-read the photo and refresh category, colors, and tags. Your brand, size, and fit note stay as-is.")) return;
+    setRetagging(true);
+    setRetagMessage(null);
+    setError(null);
+    try {
+      const res = await fetch(`/api/wardrobe/${item.id}/retag`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Re-tag failed");
+
+      // Merge the refreshed fields back into the form so Catherine sees them
+      const u = data.item ?? {};
+      setForm((f) => ({
+        ...f,
+        name:          u.name ?? f.name,
+        category:      u.category ?? f.category,
+        occasion_tags: u.occasion_tags ?? f.occasion_tags,
+        season_fit:    u.season_fit ?? f.season_fit,
+        formality:     u.formality ?? f.formality,
+        pattern:       u.pattern ?? f.pattern ?? "",
+        fabric:        u.fabric ?? f.fabric ?? "",
+      }));
+      // Push the AI-derived fields back to the parent list right away
+      onSaved({
+        name:          u.name,
+        category:      u.category,
+        subcategory:   u.subcategory,
+        colors:        u.colors,
+        occasion_tags: u.occasion_tags,
+        season_fit:    u.season_fit,
+        formality:     u.formality,
+        pattern:       u.pattern,
+        fabric:        u.fabric,
+      });
+      setRetagMessage("David refreshed the tags. Review and save if you want any tweaks.");
+      setTimeout(() => setRetagMessage(null), 5000);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Re-tag failed");
+    } finally {
+      setRetagging(false);
+    }
   }
 
   async function handleSave() {
@@ -390,7 +436,7 @@ function EditSheet({
           </div>
 
           {/* Fit note — what's off about this piece, for David */}
-          <div style={{ marginBottom: 28 }}>
+          <div style={{ marginBottom: 20 }}>
             <label style={label}>Anything off about this piece?</label>
             <textarea
               style={{ ...input, resize: "none", lineHeight: 1.5, minHeight: 70 }}
@@ -404,6 +450,38 @@ function EditSheet({
               color: "#8a7a6a", marginTop: 5, lineHeight: 1.4,
             }}>
               David reads this every time he considers this piece. Optional — leave blank if it works fine.
+            </p>
+          </div>
+
+          {/* Re-tag with David — single-item refresh via the Tagger */}
+          <div style={{ marginBottom: 28 }}>
+            <button
+              onClick={handleRetag}
+              disabled={retagging}
+              style={{
+                width: "100%", padding: "11px 0", borderRadius: 12,
+                border: "1px solid rgba(196,168,130,0.5)",
+                background: "transparent", color: "#2a2520",
+                fontFamily: "var(--font-jost), sans-serif", fontSize: 12,
+                fontWeight: 500, letterSpacing: "0.04em",
+                cursor: retagging ? "wait" : "pointer",
+              }}
+            >
+              {retagging ? "David is re-reading the photo…" : "Re-tag with David"}
+            </button>
+            {retagMessage && (
+              <p style={{
+                fontFamily: "var(--font-jost), sans-serif", fontSize: 10.5,
+                color: "#8a7a6a", marginTop: 6, lineHeight: 1.4, textAlign: "center",
+              }}>
+                {retagMessage}
+              </p>
+            )}
+            <p style={{
+              fontFamily: "var(--font-jost), sans-serif", fontSize: 10,
+              color: "#8a7a6a", marginTop: 6, lineHeight: 1.4,
+            }}>
+              Refreshes category, colors, and tags. Brand, size, name, and fit note stay as-is.
             </p>
           </div>
 
