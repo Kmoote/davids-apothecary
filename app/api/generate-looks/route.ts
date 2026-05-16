@@ -362,6 +362,95 @@ function toSlotItem(row: WardrobeRow, slot: string): RealSlotItem {
   };
 }
 
+// ── today-cache helpers ───────────────────────────────────────────────────────
+
+/** UTC midnight bookends for "today" — used to find looks generated for the current day. */
+function getTodayBounds(): { startIso: string; endIso: string } {
+  const now = new Date();
+  const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const end   = new Date(start.getTime() + 24 * 60 * 60 * 1000);
+  return { startIso: start.toISOString(), endIso: end.toISOString() };
+}
+
+/**
+ * Slot label inference for cached looks where stylist_raw didn't store it.
+ * Falls back to category-based default ordering.
+ */
+function inferSlotLabel(category: string, fallbackIndex: number): string {
+  const map: Record<string, string> = {
+    tops: "Top", bottoms: "Bottom", dresses: "Dress",
+    shoes: "Shoes", outerwear: "Layer", accessories: "Accessory",
+  };
+  return map[category] ?? ["Top", "Bottom", "Shoes", "Layer"][fallbackIndex] ?? "Item";
+}
+
+type CachedLookRow = {
+  id: string;
+  name: string;
+  theme: string;
+  item_ids: string[];
+  stylist_raw: {
+    david_note?: string;
+    closing_line?: string;
+    season?: string;
+    slot_labels?: string[];
+    slot_alts?: string[][];
+  } | null;
+};
+
+/**
+ * If we already generated 3 looks for Catherine today, hydrate and return them.
+ * Returns null if today's set isn't ready yet.
+ */
+async function loadTodaysLooks(itemMap: Map<string, WardrobeRow>): Promise<RealLook[] | null> {
+  const { startIso, endIso } = getTodayBounds();
+
+  const { data, error } = await supabase
+    .from("looks")
+    .select("id,name,theme,item_ids,stylist_raw")
+    .eq("user_id", CATHERINE_USER_ID)
+    .is("trip_id", null)
+    .gte("created_at", startIso)
+    .lt("created_at", endIso)
+    .order("created_at", { ascending: true })
+    .limit(3);
+
+  if (error || !data || data.length < 3) return null;
+
+  const looks: RealLook[] = [];
+  for (const row of data as CachedLookRow[]) {
+    const ids   = row.item_ids ?? [];
+    const alts  = row.stylist_raw?.slot_alts ?? [];
+    const labels = row.stylist_raw?.slot_labels ?? [];
+
+    // Every primary id must resolve — if any are missing (deleted item), bail
+    // out of the cache and force a fresh generation
+    if (ids.length === 0 || ids.some((id) => !itemMap.get(id))) return null;
+
+    const slots = ids.map((primaryId, i) => {
+      const primary = itemMap.get(primaryId)!;
+      const slotLabel = labels[i] ?? inferSlotLabel(primary.category, i);
+      const altItems = (alts[i] ?? [])
+        .map((altId) => itemMap.get(altId))
+        .filter(Boolean) as WardrobeRow[];
+      return {
+        slot: slotLabel,
+        items: [toSlotItem(primary, slotLabel), ...altItems.map((a) => toSlotItem(a, slotLabel))],
+      };
+    });
+
+    looks.push({
+      look_id:      row.id,
+      name:         row.name,
+      tag:          row.theme,
+      david_note:   row.stylist_raw?.david_note ?? "",
+      closing_line: row.stylist_raw?.closing_line ?? "",
+      slots,
+    });
+  }
+  return looks;
+}
+
 // ── handler ───────────────────────────────────────────────────────────────────
 
 export async function GET() {
@@ -381,6 +470,17 @@ export async function GET() {
     const allItems = (rows ?? []) as WardrobeRow[];
     if (allItems.length < 12) {
       return NextResponse.json({ error: "Not enough wardrobe items yet" }, { status: 422 });
+    }
+
+    // 1b. CACHE CHECK — if we already generated today's 3 looks, return them.
+    //     Skips the wardrobe -> Claude -> DB-insert path entirely.
+    const itemMap = new Map(allItems.map((r) => [r.id, r]));
+    const cached = await loadTodaysLooks(itemMap);
+    if (cached) {
+      return NextResponse.json({
+        looks: cached,
+        meta: { season, cached: true, candidates: allItems.length },
+      });
     }
 
     // 2. Fetch Catherine's style preferences — degrade gracefully if missing
@@ -512,11 +612,16 @@ export async function GET() {
 
     console.log(`[generate-looks] claude=${claudeLooks.length} resolved=${resolvedLooks.length} candidates=${candidates.length}`);
 
-    // 7. Persist look rows so the wear trigger can update wear_count
+    // 7. Persist look rows. Store slot_labels and slot_alts alongside the
+    //    primary item_ids so the daily cache can reconstruct the full slot
+    //    shape (including swap options) without re-calling the LLM.
     const finalLooks: RealLook[] = [];
 
     for (const look of resolvedLooks) {
-      const itemIds = look.slots.map((s) => s.items[0].item_id);
+      const itemIds    = look.slots.map((s) => s.items[0].item_id);
+      const slotLabels = look.slots.map((s) => s.slot);
+      const slotAlts   = look.slots.map((s) => s.items.slice(1).map((it) => it.item_id));
+
       const { data: inserted, error: insErr } = await supabase
         .from("looks")
         .insert({
@@ -525,7 +630,13 @@ export async function GET() {
           theme:       look.tag,
           item_ids:    itemIds,
           occasion:    look.tag,
-          stylist_raw: { david_note: look.david_note, closing_line: look.closing_line, season },
+          stylist_raw: {
+            david_note:   look.david_note,
+            closing_line: look.closing_line,
+            season,
+            slot_labels:  slotLabels,
+            slot_alts:    slotAlts,
+          },
         })
         .select("id")
         .single();
@@ -534,7 +645,10 @@ export async function GET() {
       finalLooks.push({ ...look, look_id: inserted.id });
     }
 
-    return NextResponse.json({ looks: finalLooks, meta: { season, candidates: candidates.length } });
+    return NextResponse.json({
+      looks: finalLooks,
+      meta: { season, cached: false, candidates: candidates.length },
+    });
 
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
