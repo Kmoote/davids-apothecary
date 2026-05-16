@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useMemo } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { supabase, CATHERINE_USER_ID } from "@/lib/supabase";
 import { toThumbUrl } from "@/lib/looks";
@@ -855,6 +855,7 @@ function PackingList({
 
 export default function TripDetailPage() {
   const params = useParams();
+  const router = useRouter();
   const tripId = params.id as string;
 
   const [trip, setTrip] = useState<Trip | null>(null);
@@ -862,6 +863,17 @@ export default function TripDetailPage() {
   const [items, setItems] = useState<WardrobeItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Trip-level edit state
+  const [isEditingTrip, setIsEditingTrip] = useState(false);
+  const [editName, setEditName] = useState("");
+  const [editCity, setEditCity] = useState("");
+  const [editStart, setEditStart] = useState("");
+  const [editEnd, setEditEnd] = useState("");
+  const [editOccasion, setEditOccasion] = useState("");
+  const [savingTrip, setSavingTrip] = useState(false);
+  const [tripEditError, setTripEditError] = useState<string | null>(null);
+  const [deletingTrip, setDeletingTrip] = useState(false);
 
   const reload = useCallback(async () => {
     try {
@@ -933,6 +945,63 @@ export default function TripDetailPage() {
     }
   }
 
+  function startEditTrip() {
+    if (!trip) return;
+    setEditName(trip.name);
+    setEditCity(trip.destination_city);
+    setEditStart(trip.start_date);
+    setEditEnd(trip.end_date);
+    setEditOccasion(trip.occasion ?? "");
+    setTripEditError(null);
+    setIsEditingTrip(true);
+  }
+
+  async function saveTripEdit() {
+    if (!trip || savingTrip) return;
+    if (!editName.trim()) {
+      setTripEditError("Trip name is required");
+      return;
+    }
+    setSavingTrip(true);
+    setTripEditError(null);
+    try {
+      const res = await fetch(`/api/trips/${trip.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: editName.trim(),
+          destination_city: editCity.trim(),
+          start_date: editStart,
+          end_date: editEnd,
+          occasion: editOccasion.trim() || null,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Save failed");
+      setIsEditingTrip(false);
+      reload();
+    } catch (err) {
+      setTripEditError(err instanceof Error ? err.message : "Failed to save");
+    } finally {
+      setSavingTrip(false);
+    }
+  }
+
+  async function handleDeleteTrip() {
+    if (!trip || deletingTrip) return;
+    if (!confirm(`Delete "${trip.name}" and all its events? This can't be undone.`)) return;
+    setDeletingTrip(true);
+    try {
+      const res = await fetch(`/api/trips/${trip.id}`, { method: "DELETE" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error ?? "Delete failed");
+      router.push("/trips");
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to delete trip");
+      setDeletingTrip(false);
+    }
+  }
+
   return (
     <div className="flex flex-col h-full bg-cream overflow-hidden">
       {/* header */}
@@ -963,12 +1032,53 @@ export default function TripDetailPage() {
             </p>
           )}
         </div>
-        <Link
-          href="/trips"
-          style={{ color: "#c4a882", fontFamily: "var(--font-jost), sans-serif", fontSize: 11, textDecoration: "none" }}
-        >
-          ← All trips
-        </Link>
+        <div className="flex flex-col items-end gap-1.5" style={{ flexShrink: 0 }}>
+          <Link
+            href="/trips"
+            style={{ color: "#c4a882", fontFamily: "var(--font-jost), sans-serif", fontSize: 11, textDecoration: "none" }}
+          >
+            ← All trips
+          </Link>
+          {trip && !isEditingTrip && (
+            <div className="flex items-center gap-1">
+              <button
+                onClick={startEditTrip}
+                aria-label="Edit trip"
+                style={{
+                  background: "transparent",
+                  border: "1px solid rgba(196,168,130,0.4)",
+                  color: "#c4a882",
+                  fontSize: 12,
+                  cursor: "pointer",
+                  padding: "3px 8px",
+                  borderRadius: 6,
+                  fontFamily: "var(--font-jost), sans-serif",
+                  lineHeight: 1,
+                }}
+              >
+                ✎ Edit
+              </button>
+              <button
+                onClick={handleDeleteTrip}
+                disabled={deletingTrip}
+                aria-label="Delete trip"
+                style={{
+                  background: "transparent",
+                  border: "1px solid rgba(196,168,130,0.4)",
+                  color: "#c4a882",
+                  fontSize: 14,
+                  cursor: deletingTrip ? "wait" : "pointer",
+                  padding: "1px 8px 3px",
+                  borderRadius: 6,
+                  fontFamily: "var(--font-jost), sans-serif",
+                  lineHeight: 1,
+                }}
+              >
+                ×
+              </button>
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="flex-1 overflow-y-auto no-scrollbar" style={{ padding: "16px 16px 24px", display: "flex", flexDirection: "column", gap: 24 }}>
@@ -993,6 +1103,110 @@ export default function TripDetailPage() {
           </div>
         ) : trip ? (
           <>
+            {/* Trip-level edit panel */}
+            {isEditingTrip && (
+              <section>
+                <p style={labelStyle}>Edit Trip</p>
+                <div style={{
+                  background: "#faf7f2",
+                  borderRadius: 14,
+                  border: "1px solid rgba(196,168,130,0.5)",
+                  padding: 14,
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 12,
+                }}>
+                  <div>
+                    <p style={fieldLabelStyle}>Trip name</p>
+                    <input
+                      type="text"
+                      value={editName}
+                      onChange={(e) => setEditName(e.target.value)}
+                      style={{ ...inputStyle, background: "#fff" }}
+                    />
+                  </div>
+
+                  <div>
+                    <p style={fieldLabelStyle}>Destination city</p>
+                    <input
+                      type="text"
+                      value={editCity}
+                      onChange={(e) => setEditCity(e.target.value)}
+                      style={{ ...inputStyle, background: "#fff" }}
+                    />
+                  </div>
+
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                    <div>
+                      <p style={fieldLabelStyle}>Start date</p>
+                      <input
+                        type="date"
+                        value={editStart}
+                        onChange={(e) => setEditStart(e.target.value)}
+                        style={{ ...inputStyle, background: "#fff" }}
+                      />
+                    </div>
+                    <div>
+                      <p style={fieldLabelStyle}>End date</p>
+                      <input
+                        type="date"
+                        value={editEnd}
+                        onChange={(e) => setEditEnd(e.target.value)}
+                        style={{ ...inputStyle, background: "#fff" }}
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <p style={fieldLabelStyle}>Occasion (optional)</p>
+                    <input
+                      type="text"
+                      value={editOccasion}
+                      onChange={(e) => setEditOccasion(e.target.value)}
+                      placeholder="vacation, business, wedding, family…"
+                      style={{ ...inputStyle, background: "#fff" }}
+                    />
+                  </div>
+
+                  {tripEditError && (
+                    <div style={{
+                      fontFamily: "var(--font-jost), sans-serif",
+                      fontSize: 11, color: "#7a2a2a",
+                    }}>{tripEditError}</div>
+                  )}
+
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => { setIsEditingTrip(false); setTripEditError(null); }}
+                      disabled={savingTrip}
+                      style={{
+                        flex: 1, padding: "10px 0", borderRadius: 12,
+                        background: "transparent", color: "#2a2520",
+                        fontFamily: "var(--font-jost), sans-serif", fontSize: 12, fontWeight: 500,
+                        border: "1px solid rgba(42,37,32,0.2)", cursor: "pointer",
+                      }}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={saveTripEdit}
+                      disabled={!editName.trim() || savingTrip}
+                      style={{
+                        flex: 2, padding: "10px 0", borderRadius: 12,
+                        background: !editName.trim() ? "rgba(42,37,32,0.4)" : "#2a2520",
+                        color: "#c4a882",
+                        fontFamily: "var(--font-jost), sans-serif", fontSize: 12, fontWeight: 600,
+                        border: "none",
+                        cursor: !editName.trim() || savingTrip ? "not-allowed" : "pointer",
+                      }}
+                    >
+                      {savingTrip ? "Saving…" : "Save changes"}
+                    </button>
+                  </div>
+                </div>
+              </section>
+            )}
+
             {/* Events */}
             <section>
               <p style={labelStyle}>Events · {events.length}</p>
