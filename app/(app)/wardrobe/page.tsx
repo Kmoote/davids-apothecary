@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { supabase, CATHERINE_USER_ID } from "@/lib/supabase";
 import { toThumbUrl } from "@/lib/looks";
+import type { FitInference } from "@/lib/fit-tagger";
 
 type WardrobeItem = {
   id: string;
@@ -24,6 +25,8 @@ type WardrobeItem = {
   thumbnail_url: string | null;
   david_note: string | null;
   fit_note: string | null;
+  // Phase B1b — David's automated fit reasoning; null until fit-inference Tagger runs
+  fit_inference: FitInference | null;
 };
 
 const CATEGORIES = ["All", "Tops", "Bottoms", "Outerwear", "Shoes", "Accessories", "Dresses"];
@@ -84,6 +87,8 @@ function EditSheet({
   const [error, setError]   = useState<string | null>(null);
   const [retagging, setRetagging] = useState(false);
   const [retagMessage, setRetagMessage] = useState<string | null>(null);
+  // Phase B1b — David's fit reading. Local state so re-tag can refresh it.
+  const [fitInference, setFitInference] = useState<FitInference | null>(item.fit_inference ?? null);
   const sheetRef = useRef<HTMLDivElement>(null);
 
   // Prevent background scroll while sheet is open
@@ -106,7 +111,7 @@ function EditSheet({
 
   async function handleRetag() {
     if (retagging) return;
-    if (!confirm("Re-tag this piece? David will re-read the photo and refresh category, colors, and tags. Your brand, size, and fit note stay as-is.")) return;
+    if (!confirm("Re-tag this piece? David will re-read the photo and refresh category, colors, tags, and his fit reading. Your brand, size, and fit note stay as-is.")) return;
     setRetagging(true);
     setRetagMessage(null);
     setError(null);
@@ -138,7 +143,10 @@ function EditSheet({
         formality:     u.formality,
         pattern:       u.pattern,
         fabric:        u.fabric,
+        fit_inference: u.fit_inference,
       });
+      // Phase B1b — refresh the in-sheet "How David Reads This Piece" card
+      if (u.fit_inference) setFitInference(u.fit_inference as FitInference);
       setRetagMessage("David refreshed the tags. Review and save if you want any tweaks.");
       setTimeout(() => setRetagMessage(null), 5000);
     } catch (e) {
@@ -435,6 +443,77 @@ function EditSheet({
             />
           </div>
 
+          {/* Phase B1b — David's fit reading (read-only) */}
+          <div style={{ marginBottom: 20 }}>
+            <label style={label}>How David Reads This Piece</label>
+            {fitInference ? (
+              <div style={{
+                background: "rgba(196,168,130,0.10)",
+                border: "1px solid rgba(196,168,130,0.30)",
+                borderRadius: 12,
+                padding: "12px 14px",
+              }}>
+                {fitInference.fit_note_for_catherine && (
+                  <p style={{
+                    fontFamily: "var(--font-jost), sans-serif",
+                    fontSize: 13,
+                    color: "#2a2520",
+                    lineHeight: 1.5,
+                    margin: 0,
+                  }}>
+                    {fitInference.fit_note_for_catherine}
+                  </p>
+                )}
+                {(() => {
+                  const meta = [
+                    fitInference.silhouette,
+                    fitInference.ease_1to5 != null && `ease ${fitInference.ease_1to5}/5`,
+                    fitInference.drape_stiffness_1to5 != null && `drape ${fitInference.drape_stiffness_1to5}/5`,
+                    fitInference.length_category,
+                    fitInference.estimated_fabric_weight && `${fitInference.estimated_fabric_weight} weight`,
+                  ].filter(Boolean).join("  ·  ");
+                  return meta ? (
+                    <p style={{
+                      fontFamily: "var(--font-jost), sans-serif",
+                      fontSize: 10.5,
+                      color: "#8a7a6a",
+                      lineHeight: 1.5,
+                      marginTop: 8,
+                      marginBottom: 0,
+                      textTransform: "lowercase",
+                    }}>
+                      {meta}
+                    </p>
+                  ) : null;
+                })()}
+                {fitInference.confidence === "low" && (
+                  <p style={{
+                    fontFamily: "var(--font-jost), sans-serif",
+                    fontSize: 10,
+                    color: "#a89484",
+                    fontStyle: "italic",
+                    marginTop: 8,
+                    marginBottom: 0,
+                  }}>
+                    David isn't fully sure on this one — the photo isn't giving him a clear read.
+                  </p>
+                )}
+              </div>
+            ) : (
+              <p style={{
+                fontFamily: "var(--font-jost), sans-serif",
+                fontSize: 11.5,
+                color: "#8a7a6a",
+                lineHeight: 1.5,
+                fontStyle: "italic",
+                padding: "10px 0",
+                margin: 0,
+              }}>
+                David hasn't read this one yet. Tap "Re-tag with David" below.
+              </p>
+            )}
+          </div>
+
           {/* Fit note — what's off about this piece, for David */}
           <div style={{ marginBottom: 20 }}>
             <label style={label}>Anything off about this piece?</label>
@@ -481,7 +560,7 @@ function EditSheet({
               fontFamily: "var(--font-jost), sans-serif", fontSize: 10,
               color: "#8a7a6a", marginTop: 6, lineHeight: 1.4,
             }}>
-              Refreshes category, colors, and tags. Brand, size, name, and fit note stay as-is.
+              Refreshes category, colors, tags, and David's fit reading. Brand, size, name, and your own fit note stay as-is.
             </p>
           </div>
 
@@ -601,7 +680,7 @@ export default function WardrobePage() {
     async function load() {
       const { data } = await supabase
         .from("wardrobe_items")
-        .select("id,name,brand,size,category,subcategory,colors,occasion_tags,season_fit,formality,pattern,fabric,wear_count,last_worn_at,photo_url,thumbnail_url,david_note,fit_note")
+        .select("id,name,brand,size,category,subcategory,colors,occasion_tags,season_fit,formality,pattern,fabric,wear_count,last_worn_at,photo_url,thumbnail_url,david_note,fit_note,fit_inference")
         .eq("user_id", CATHERINE_USER_ID)
         .eq("is_active", true)
         .order("last_worn_at", { ascending: true, nullsFirst: false });

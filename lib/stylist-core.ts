@@ -140,6 +140,11 @@ export type UserPrefs = {
   waist_size: string | null;
   cup_size: string | null;
   weight: string | null;
+  // Phase B1a — self-measured body dimensions (inches)
+  shoulder_in: number | null;
+  bust_in: number | null;
+  hip_in: number | null;
+  inseam_in: number | null;
   tops_that_fit: string | null;
   tops_that_almost_fit: string | null;
   bottoms_that_fit: string | null;
@@ -165,6 +170,7 @@ export const PREFS_SELECT = [
   "height", "hair_color", "eye_color", "shoe_size",
   "skin_tone", "color_season", "favored_colors", "avoided_colors",
   "body_shape", "waist_size", "cup_size", "weight",
+  "shoulder_in", "bust_in", "hip_in", "inseam_in",
   "tops_that_fit", "tops_that_almost_fit",
   "bottoms_that_fit", "bottoms_that_almost_fit",
   "current_style_words", "aspirational_style_words",
@@ -196,6 +202,15 @@ export function buildPrefSummary(prefs: UserPrefs | null): string {
     prefs.shoe_size     && `shoe size ${prefs.shoe_size}`,
   ].filter(Boolean);
   if (bodyParts.length) lines.push(`Catherine — body: ${bodyParts.join(", ")}.`);
+
+  // Phase B1a — self-measured tape measurements (inches)
+  const measureParts = [
+    prefs.shoulder_in != null && `shoulder ${prefs.shoulder_in}"`,
+    prefs.bust_in     != null && `bust ${prefs.bust_in}"`,
+    prefs.hip_in      != null && `hip ${prefs.hip_in}"`,
+    prefs.inseam_in   != null && `inseam ${prefs.inseam_in}"`,
+  ].filter(Boolean);
+  if (measureParts.length) lines.push(`Catherine — measurements: ${measureParts.join(", ")}.`);
 
   // Colors
   const colorParts: string[] = [];
@@ -256,6 +271,9 @@ export type WardrobeRow = {
   fabric: string | null;
   last_worn_at: string | null;
   fit_note?: string | null;
+  // Phase B1b — David's automated fit reasoning, populated by the
+  // fit-inference Tagger. Null until that pass runs against the item.
+  fit_inference?: Record<string, unknown> | null;
   wear_count?: number;
   pass_count?: number;
 };

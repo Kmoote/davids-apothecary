@@ -6,7 +6,11 @@
  * tags the rest with Claude vision, and writes rows to the DB.
  *
  * Usage:
- *   node scripts/bulk-tag.mjs
+ *   node scripts/bulk-tag.mjs                  # tag new items only (recognition pass)
+ *   node scripts/bulk-tag.mjs --retag          # re-tag every item (recognition pass)
+ *   node scripts/bulk-tag.mjs --with-fit       # tag new items + Phase B1b fit-inference
+ *   node scripts/bulk-tag.mjs --retag --with-fit  # re-tag every item + fit-inference
+ *   node scripts/bulk-tag.mjs --fit-only       # skip recognition; refresh fit_inference on ALL existing items
  *
  * Run from the project root. Reads credentials from .env.local automatically.
  */
@@ -83,6 +87,91 @@ Fields required:
   "fabric": fabric type if detectable ("cotton" | "wool" | "silk" | "linen" | "denim" | "leather" | "synthetic" | "knit") or null
 }`;
 
+// ── Phase B1b: Fit-Inference Tagger (mirrors lib/fit-tagger.ts) ───────────────
+
+const FIT_SYSTEM = `You are David, Catherine's personal stylist with an MFA from FIT and a decade of working with real women's closets. Your job here is narrower than usual: look at one garment photo and write structured fit reasoning for how it will lay on Catherine's specific body.
+
+You will receive Catherine's body context in the user message. Use it. The fit_note_for_catherine should sound like you talking to her — specific, warm, honest. If something is likely to fall well, say why in concrete terms (drape, length, where it skims vs. where it floats). If something is likely to be a problem on her body (length wrong for proportion, shape fights her frame, fabric weight wrong), say it plainly in one beat.
+
+Do not flatter. Do not body-police. Do not narrate ("I've analyzed your measurements…"). Just observe and say.
+
+Return ONLY valid JSON. No markdown, no explanation, no preamble.`;
+
+const FIT_SCHEMA_INSTRUCTIONS = `Return a JSON object with these fields:
+
+{
+  "silhouette": one of "fitted" | "relaxed" | "A-line" | "shift" | "boxy" | "drapey" | "tailored" | "oversized" | "column" | "wrap" | "other",
+  "ease_1to5": integer 1–5 (1 = skin-tight, 3 = standard, 5 = oversized),
+  "drape_stiffness_1to5": integer 1–5 (1 = fluid like silk, 5 = architectural like denim/wool),
+  "estimated_fabric_weight": one of "light" | "medium" | "heavy",
+  "length_category": one of "cropped" | "regular" | "long" | "above-knee" | "knee" | "midi" | "maxi" | "ankle" or null if not length-relevant,
+  "neckline": short descriptor like "crew", "v-neck", "scoop", "boat", "halter", "collared", "off-shoulder" — or null if not a top/dress,
+  "sleeve": short descriptor like "sleeveless", "short", "3/4", "long", "cap", "bell" — or null if not a top/dress,
+  "body_zones_emphasized": array from "shoulders" | "bust" | "waist" | "hips" | "legs" | "neckline" | "back",
+  "confidence": one of "low" | "medium" | "high",
+  "fit_note_for_catherine": 1–2 sentences in your voice spoken TO Catherine — concrete things like length, drape, where it sits. About 20–35 words.
+}
+
+If the garment is shoes/accessories where most fields don't apply, fill what you can and set the rest to null. fit_note_for_catherine should still say something useful.`;
+
+const FIT_BODY_CONTEXT_COLUMNS = [
+  "height", "body_shape", "waist_size", "cup_size", "weight",
+  "shoulder_in", "bust_in", "hip_in", "inseam_in",
+  "tops_that_fit", "tops_that_almost_fit",
+  "bottoms_that_fit", "bottoms_that_almost_fit",
+].join(",");
+
+function buildFitBodyContext(ctx) {
+  if (!ctx) return "Catherine's body details are not yet in the profile.";
+  const parts = [];
+  const phys = [
+    ctx.height       && `${ctx.height} tall`,
+    ctx.body_shape   && `${ctx.body_shape.toLowerCase()} body shape`,
+    ctx.weight       && `weight ${ctx.weight}`,
+  ].filter(Boolean);
+  if (phys.length) parts.push(phys.join(", "));
+  const sizes = [
+    ctx.waist_size && `waist ${ctx.waist_size}`,
+    ctx.cup_size   && `bust ${ctx.cup_size}`,
+  ].filter(Boolean);
+  if (sizes.length) parts.push(sizes.join(", "));
+  const tape = [
+    ctx.shoulder_in != null && `shoulder ${ctx.shoulder_in}"`,
+    ctx.bust_in     != null && `bust ${ctx.bust_in}"`,
+    ctx.hip_in      != null && `hip ${ctx.hip_in}"`,
+    ctx.inseam_in   != null && `inseam ${ctx.inseam_in}"`,
+  ].filter(Boolean);
+  if (tape.length) parts.push(`tape: ${tape.join(", ")}`);
+  const fitHistory = [
+    ctx.tops_that_fit           && `tops that work — ${ctx.tops_that_fit}`,
+    ctx.tops_that_almost_fit    && `tops that don't quite work — ${ctx.tops_that_almost_fit}`,
+    ctx.bottoms_that_fit        && `bottoms that work — ${ctx.bottoms_that_fit}`,
+    ctx.bottoms_that_almost_fit && `bottoms that don't quite work — ${ctx.bottoms_that_almost_fit}`,
+  ].filter(Boolean);
+  if (fitHistory.length) parts.push(fitHistory.join("; "));
+  return parts.length ? parts.join(". ") + "." : "Catherine's body details are minimal.";
+}
+
+async function inferFit(base64, mediaType, bodyContext) {
+  const bodySummary = buildFitBodyContext(bodyContext);
+  const msg = await anthropic.messages.create({
+    model: "claude-sonnet-4-6",
+    max_tokens: 600,
+    system: FIT_SYSTEM,
+    messages: [{
+      role: "user",
+      content: [
+        { type: "image", source: { type: "base64", media_type: mediaType, data: base64 } },
+        { type: "text", text: `${FIT_SCHEMA_INSTRUCTIONS}\n\nCatherine's body context (use this to reason about how this garment will lay on HER):\n${bodySummary}` },
+      ],
+    }],
+  });
+  const text = msg.content[0]?.type === "text" ? msg.content[0].text : "{}";
+  const match = text.match(/\{[\s\S]*\}/);
+  if (!match) return null;
+  try { return JSON.parse(match[0]); } catch { return null; }
+}
+
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 /** List all files recursively in the bucket (handles subfolders). */
@@ -140,9 +229,32 @@ async function tagImage(base64, mediaType) {
 // ── main ──────────────────────────────────────────────────────────────────────
 
 async function main() {
-  // --retag flag: re-tag existing items (update in place) instead of skipping them
-  const retag = process.argv.includes("--retag");
-  console.log(`\n🗄  David's Apothecary — Bulk Tagger${retag ? " (retag mode)" : ""}\n`);
+  // Flag parsing
+  const retag    = process.argv.includes("--retag");
+  const withFit  = process.argv.includes("--with-fit");
+  const fitOnly  = process.argv.includes("--fit-only");
+
+  if (fitOnly) {
+    return runFitOnly();
+  }
+
+  const modeTags = [
+    retag && "retag",
+    withFit && "with-fit",
+  ].filter(Boolean).join(", ");
+  console.log(`\n🗄  David's Apothecary — Bulk Tagger${modeTags ? ` (${modeTags})` : ""}\n`);
+
+  // Fetch Catherine's body context once if we need it for fit-inference
+  let bodyContext = null;
+  if (withFit) {
+    const { data: bodyRow } = await supabase
+      .from("user_preferences")
+      .select(FIT_BODY_CONTEXT_COLUMNS)
+      .eq("user_id", CATHERINE_USER_ID)
+      .single();
+    bodyContext = bodyRow ?? null;
+    console.log(`   🧵  Fit-inference enabled — body context loaded${bodyContext ? "" : " (empty)"}\n`);
+  }
 
   // 1. list files in bucket
   console.log(`📦  Listing files in "${BUCKET}"…`);
@@ -185,6 +297,17 @@ async function main() {
       const { base64, mediaType } = await fetchBase64(publicUrl);
       const tags = await tagImage(base64, mediaType);
 
+      // Phase B1b — optional fit-inference second pass
+      let fitInference = null;
+      if (withFit) {
+        try {
+          fitInference = await inferFit(base64, mediaType, bodyContext);
+        } catch (fitErr) {
+          // Don't fail the row over fit-inference — log and continue.
+          console.log(`\n      ⚠️  fit-inference skipped: ${fitErr.message}`);
+        }
+      }
+
       const payload = {
         user_id:       CATHERINE_USER_ID,
         photo_url:     publicUrl,
@@ -200,6 +323,7 @@ async function main() {
         name:          tags.name    ?? null,
         brand:         tags.brand   ?? null,
         tagger_raw:    tags,
+        ...(fitInference ? { fit_inference: fitInference } : {}),
       };
 
       let dbErr;
@@ -233,6 +357,82 @@ async function main() {
   if (added)   console.log(`   ${added} tagged and added`);
   if (updated) console.log(`   ${updated} re-tagged and updated`);
   if (skipped) console.log(`   ${skipped} already in wardrobe (skipped)`);
+  if (failed)  console.log(`   ${failed} failed — re-run to retry`);
+  console.log();
+}
+
+// ── --fit-only mode ───────────────────────────────────────────────────────────
+//
+// Skip recognition entirely. Iterate all existing wardrobe_items rows and
+// refresh fit_inference using the current body_context. Use this after
+// Catherine updates her measurements, or after the fit-inference prompt
+// itself changes.
+
+async function runFitOnly() {
+  console.log(`\n🗄  David's Apothecary — Fit-Inference Refresh (--fit-only)\n`);
+
+  // 1. Fetch body context once
+  const { data: bodyRow } = await supabase
+    .from("user_preferences")
+    .select(FIT_BODY_CONTEXT_COLUMNS)
+    .eq("user_id", CATHERINE_USER_ID)
+    .single();
+  const bodyContext = bodyRow ?? null;
+  console.log(`   🧵  Body context loaded${bodyContext ? "" : " (empty — fit notes will be generic)"}\n`);
+
+  // 2. Fetch every active wardrobe item with its photo
+  const { data: items, error } = await supabase
+    .from("wardrobe_items")
+    .select("id,name,photo_url")
+    .eq("user_id", CATHERINE_USER_ID)
+    .eq("is_active", true);
+
+  if (error) throw error;
+  if (!items || items.length === 0) {
+    console.log("   No active wardrobe items found.\n");
+    return;
+  }
+  console.log(`   Found ${items.length} item(s) to refresh.\n`);
+
+  let updated = 0;
+  let failed = 0;
+
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    const label = item.name ?? item.id.slice(0, 8);
+    process.stdout.write(`   ⏳  [${i + 1}/${items.length}] ${label} … `);
+
+    try {
+      const { base64, mediaType } = await fetchBase64(item.photo_url);
+      const fitInference = await inferFit(base64, mediaType, bodyContext);
+
+      if (!fitInference) {
+        console.log(`⚠️  no JSON returned, skipped`);
+        failed++;
+        continue;
+      }
+
+      const { error: updateErr } = await supabase
+        .from("wardrobe_items")
+        .update({ fit_inference: fitInference })
+        .eq("id", item.id)
+        .eq("user_id", CATHERINE_USER_ID);
+
+      if (updateErr) throw new Error(updateErr.message);
+
+      console.log(`✅  ${fitInference.silhouette ?? "(no silhouette)"}`);
+      updated++;
+
+      // small delay to avoid rate-limiting
+      if (i < items.length - 1) await new Promise((r) => setTimeout(r, 400));
+    } catch (err) {
+      console.log(`❌  ${err.message}`);
+      failed++;
+    }
+  }
+
+  console.log(`\n✨  Done.`);
+  if (updated) console.log(`   ${updated} fit_inference refreshed`);
   if (failed)  console.log(`   ${failed} failed — re-run to retry`);
   console.log();
 }

@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { createClient } from "@supabase/supabase-js";
+import {
+  inferFit,
+  FIT_BODY_CONTEXT_SELECT,
+  type FitBodyContext,
+} from "@/lib/fit-tagger";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -148,6 +153,31 @@ export async function POST(
     // Only refresh name if Catherine hasn't given it her own
     if (nameWasUntouched && tags.name) {
       update.name = tags.name;
+    }
+
+    // 4b. Phase B1b — fit-inference pass. Best-effort: if it fails, we still
+    //     persist the recognition update so the user isn't left with a half-
+    //     broken retag. The Stylist gracefully tolerates a null fit_inference.
+    try {
+      const { data: bodyRow } = await supabase
+        .from("user_preferences")
+        .select(FIT_BODY_CONTEXT_SELECT)
+        .eq("user_id", CATHERINE_USER_ID)
+        .single();
+
+      const fit = await inferFit(anthropic, {
+        base64,
+        mediaType,
+        bodyContext: (bodyRow ?? null) as FitBodyContext | null,
+      });
+
+      if (fit) {
+        update.fit_inference = fit;
+      }
+    } catch (fitErr) {
+      // Log but don't fail the request — fit-inference is additive.
+      console.warn("[wardrobe retag] fit-inference skipped:",
+        fitErr instanceof Error ? fitErr.message : String(fitErr));
     }
 
     const { data: updated, error: updateErr } = await supabase

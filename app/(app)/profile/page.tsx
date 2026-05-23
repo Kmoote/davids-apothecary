@@ -32,6 +32,11 @@ type Prefs = {
   waist_size: string | null;
   cup_size: string | null;
   weight: string | null;
+  // Phase B1a — self-measured body dimensions (inches)
+  shoulder_in: number | null;
+  bust_in: number | null;
+  hip_in: number | null;
+  inseam_in: number | null;
   tops_that_fit: string | null;
   tops_that_almost_fit: string | null;
   bottoms_that_fit: string | null;
@@ -131,6 +136,50 @@ function TextInput({
       placeholder={placeholder}
       style={inputStyle}
     />
+  );
+}
+
+function NumberInput({
+  value, onChange, placeholder, suffix,
+}: { value: number | null; onChange: (n: number | null) => void; placeholder?: string; suffix?: string }) {
+  // Type="text" + inputMode="decimal" gives the right iOS keyboard without
+  // the spinner buttons that type="number" adds.
+  return (
+    <div style={{ position: "relative" }}>
+      <input
+        type="text"
+        inputMode="decimal"
+        pattern="[0-9]*\.?[0-9]*"
+        value={value == null ? "" : String(value)}
+        onChange={(e) => {
+          const raw = e.target.value.trim();
+          if (raw === "") return onChange(null);
+          // Allow trailing decimal point while typing ("38.")
+          if (/^\d+\.?\d*$/.test(raw)) {
+            const n = parseFloat(raw);
+            onChange(Number.isFinite(n) ? n : null);
+          }
+        }}
+        placeholder={placeholder}
+        style={{ ...inputStyle, paddingRight: suffix ? 36 : (inputStyle.padding as string).split(" ")[1] }}
+      />
+      {suffix && (
+        <span
+          style={{
+            position: "absolute",
+            right: 14,
+            top: "50%",
+            transform: "translateY(-50%)",
+            fontFamily: "var(--font-jost), sans-serif",
+            fontSize: 12,
+            color: "#8a7a6a",
+            pointerEvents: "none",
+          }}
+        >
+          {suffix}
+        </span>
+      )}
+    </div>
   );
 }
 
@@ -256,6 +305,7 @@ const PREFS_COLUMNS = [
   "height", "hair_color", "eye_color", "shoe_size",
   "skin_tone", "color_season", "favored_colors", "avoided_colors",
   "body_shape", "waist_size", "cup_size", "weight",
+  "shoulder_in", "bust_in", "hip_in", "inseam_in",
   "tops_that_fit", "tops_that_almost_fit",
   "bottoms_that_fit", "bottoms_that_almost_fit",
   "current_style_words", "aspirational_style_words",
@@ -315,6 +365,10 @@ export default function ProfilePage() {
     (draft.waist_size ?? "") !== (prefs.waist_size ?? "") ||
     (draft.cup_size ?? "") !== (prefs.cup_size ?? "") ||
     (draft.weight ?? "") !== (prefs.weight ?? "") ||
+    (draft.shoulder_in ?? null) !== (prefs.shoulder_in ?? null) ||
+    (draft.bust_in ?? null) !== (prefs.bust_in ?? null) ||
+    (draft.hip_in ?? null) !== (prefs.hip_in ?? null) ||
+    (draft.inseam_in ?? null) !== (prefs.inseam_in ?? null) ||
     (draft.tops_that_fit ?? "") !== (prefs.tops_that_fit ?? "") ||
     (draft.tops_that_almost_fit ?? "") !== (prefs.tops_that_almost_fit ?? "") ||
     (draft.bottoms_that_fit ?? "") !== (prefs.bottoms_that_fit ?? "") ||
@@ -361,6 +415,10 @@ export default function ProfilePage() {
         waist_size: draft.waist_size || null,
         cup_size: draft.cup_size || null,
         weight: draft.weight || null,
+        shoulder_in: draft.shoulder_in,
+        bust_in: draft.bust_in,
+        hip_in: draft.hip_in,
+        inseam_in: draft.inseam_in,
         tops_that_fit: draft.tops_that_fit || null,
         tops_that_almost_fit: draft.tops_that_almost_fit || null,
         bottoms_that_fit: draft.bottoms_that_fit || null,
@@ -566,6 +624,67 @@ export default function ProfilePage() {
                 Optional. Anything skipped, David doesn't use. Nothing here is ever displayed back to you.
               </p>
               <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                {/* Phase B1a — Body Measurements panel (in inches) */}
+                <div
+                  style={{
+                    background: "rgba(196,168,130,0.08)",
+                    border: "1px solid rgba(196,168,130,0.30)",
+                    borderRadius: 12,
+                    padding: "12px 14px",
+                  }}
+                >
+                  <p style={{ ...fieldLabelStyle, marginBottom: 4 }}>Body measurements</p>
+                  <p style={{ ...helpTextStyle, marginTop: 0, marginBottom: 12 }}>
+                    Optional. About five minutes with a tape measure. The more David has, the better he can reason about what will lay well on you. All in inches.
+                  </p>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                    <Field
+                      label="Shoulder"
+                      helpText="Across the back, top edge of one shoulder to the other."
+                    >
+                      <NumberInput
+                        value={draft.shoulder_in}
+                        onChange={(n) => setField("shoulder_in", n)}
+                        placeholder="e.g. 15"
+                        suffix="in"
+                      />
+                    </Field>
+                    <Field
+                      label="Bust"
+                      helpText="Around the fullest part, tape level all the way around."
+                    >
+                      <NumberInput
+                        value={draft.bust_in}
+                        onChange={(n) => setField("bust_in", n)}
+                        placeholder="e.g. 36"
+                        suffix="in"
+                      />
+                    </Field>
+                    <Field
+                      label="Hip"
+                      helpText="Around the fullest point, usually 7–9 in below your waist."
+                    >
+                      <NumberInput
+                        value={draft.hip_in}
+                        onChange={(n) => setField("hip_in", n)}
+                        placeholder="e.g. 39"
+                        suffix="in"
+                      />
+                    </Field>
+                    <Field
+                      label="Inseam"
+                      helpText="Crotch seam straight down to ankle on the inside of the leg."
+                    >
+                      <NumberInput
+                        value={draft.inseam_in}
+                        onChange={(n) => setField("inseam_in", n)}
+                        placeholder="e.g. 30"
+                        suffix="in"
+                      />
+                    </Field>
+                  </div>
+                </div>
+
                 <Field label="Body shape">
                   <ChoiceChips
                     value={draft.body_shape}

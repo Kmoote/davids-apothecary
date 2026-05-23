@@ -132,6 +132,11 @@ type UserPrefs = {
   waist_size: string | null;
   cup_size: string | null;
   weight: string | null;
+  // Phase B1a — self-measured body dimensions (inches)
+  shoulder_in: number | null;
+  bust_in: number | null;
+  hip_in: number | null;
+  inseam_in: number | null;
   tops_that_fit: string | null;
   tops_that_almost_fit: string | null;
   bottoms_that_fit: string | null;
@@ -157,6 +162,7 @@ const PREFS_SELECT = [
   "height", "hair_color", "eye_color", "shoe_size",
   "skin_tone", "color_season", "favored_colors", "avoided_colors",
   "body_shape", "waist_size", "cup_size", "weight",
+  "shoulder_in", "bust_in", "hip_in", "inseam_in",
   "tops_that_fit", "tops_that_almost_fit",
   "bottoms_that_fit", "bottoms_that_almost_fit",
   "current_style_words", "aspirational_style_words",
@@ -188,6 +194,15 @@ function buildPrefSummary(prefs: UserPrefs | null): string {
     prefs.shoe_size     && `shoe size ${prefs.shoe_size}`,
   ].filter(Boolean);
   if (bodyParts.length) lines.push(`Catherine — body: ${bodyParts.join(", ")}.`);
+
+  // Phase B1a — self-measured tape measurements (inches)
+  const measureParts = [
+    prefs.shoulder_in != null && `shoulder ${prefs.shoulder_in}"`,
+    prefs.bust_in     != null && `bust ${prefs.bust_in}"`,
+    prefs.hip_in      != null && `hip ${prefs.hip_in}"`,
+    prefs.inseam_in   != null && `inseam ${prefs.inseam_in}"`,
+  ].filter(Boolean);
+  if (measureParts.length) lines.push(`Catherine — measurements: ${measureParts.join(", ")}.`);
 
   // Colors
   const colorParts: string[] = [];
@@ -284,6 +299,8 @@ type WardrobeRow = {
   pattern: string | null; fabric: string | null;
   last_worn_at: string | null;
   fit_note: string | null;
+  // Phase B1b — David's automated fit reasoning JSON; null until tagger runs
+  fit_inference: Record<string, unknown> | null;
   wear_count: number;
   pass_count: number;
 };
@@ -461,7 +478,7 @@ export async function GET() {
     //    The order here feeds both the candidate filter AND the alt pool.
     const { data: rows, error: dbErr } = await supabase
       .from("wardrobe_items")
-      .select("id,name,category,subcategory,photo_url,thumbnail_url,colors,occasion_tags,formality,season_fit,pattern,fabric,last_worn_at,fit_note,wear_count,pass_count")
+      .select("id,name,category,subcategory,photo_url,thumbnail_url,colors,occasion_tags,formality,season_fit,pattern,fabric,last_worn_at,fit_note,fit_inference,wear_count,pass_count")
       .eq("user_id", CATHERINE_USER_ID)
       .eq("is_active", true)
       .order("last_worn_at", { ascending: true, nullsFirst: true });
@@ -500,20 +517,26 @@ export async function GET() {
     const candidates = buildCandidatePool(allItems, season);
 
     // 4. Condensed payload for Claude — metadata only, no photo URLs.
-    //    fit_note is included so David sees per-item fit problems Catherine has flagged.
-    const condensed = candidates.map((r) => ({
-      id:           r.id,
-      name:         r.name ?? r.category,
-      category:     r.category,
-      subcategory:  r.subcategory,
-      colors:       r.colors,
-      occasion_tags: r.occasion_tags,
-      formality:    r.formality,
-      season_fit:   r.season_fit,
-      pattern:      r.pattern,
-      fabric:       r.fabric,
-      fit_note:     r.fit_note ?? undefined,
-    }));
+    //    - fit_note (Phase A1b) is Catherine's manual flag of per-item fit problems
+    //    - fit_inference_note (Phase B1b) is David's automated fit reasoning,
+    //      spoken in his voice TO Catherine. The Stylist quotes or reasons over it.
+    const condensed = candidates.map((r) => {
+      const fitInference = r.fit_inference as { fit_note_for_catherine?: string } | null;
+      return {
+        id:           r.id,
+        name:         r.name ?? r.category,
+        category:     r.category,
+        subcategory:  r.subcategory,
+        colors:       r.colors,
+        occasion_tags: r.occasion_tags,
+        formality:    r.formality,
+        season_fit:   r.season_fit,
+        pattern:      r.pattern,
+        fabric:       r.fabric,
+        fit_note:     r.fit_note ?? undefined,
+        fit_inference_note: fitInference?.fit_note_for_catherine ?? undefined,
+      };
+    });
 
     // 5. Call Claude with the focused candidate pool + Catherine's preferences
     const msg = await anthropic.messages.create({
