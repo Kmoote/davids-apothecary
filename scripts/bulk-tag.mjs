@@ -6,11 +6,14 @@
  * tags the rest with Claude vision, and writes rows to the DB.
  *
  * Usage:
- *   node scripts/bulk-tag.mjs                  # tag new items only (recognition pass)
- *   node scripts/bulk-tag.mjs --retag          # re-tag every item (recognition pass)
- *   node scripts/bulk-tag.mjs --with-fit       # tag new items + Phase B1b fit-inference
- *   node scripts/bulk-tag.mjs --retag --with-fit  # re-tag every item + fit-inference
- *   node scripts/bulk-tag.mjs --fit-only       # skip recognition; refresh fit_inference on ALL existing items
+ *   node scripts/bulk-tag.mjs                       # tag new items only (recognition pass)
+ *   node scripts/bulk-tag.mjs --retag               # re-tag every item (recognition pass)
+ *   node scripts/bulk-tag.mjs --with-fit            # tag new items + Phase B1b fit-inference
+ *   node scripts/bulk-tag.mjs --retag --with-fit    # re-tag every item + fit-inference
+ *   node scripts/bulk-tag.mjs --fit-only            # skip recognition; refresh fit_inference on ALL existing items
+ *   node scripts/bulk-tag.mjs --with-embed          # tag new items + Phase B2 visual embedding (Marqo)
+ *   node scripts/bulk-tag.mjs --embed-only          # skip recognition + fit; refresh embedding on ALL existing items
+ *   node scripts/bulk-tag.mjs --retag --with-fit --with-embed  # everything, the whole pipeline, on every item
  *
  * Run from the project root. Reads credentials from .env.local automatically.
  */
@@ -172,6 +175,39 @@ async function inferFit(base64, mediaType, bodyContext) {
   try { return JSON.parse(match[0]); } catch { return null; }
 }
 
+// ── Phase B2: visual embedding (Marqo on Modal) ───────────────────────────────
+
+const MARQO_EMBEDDER_URL    = env.MARQO_EMBEDDER_URL;
+const MARQO_EMBEDDER_SECRET = env.MARQO_EMBEDDER_SECRET;
+
+async function embedImage(base64) {
+  if (!MARQO_EMBEDDER_URL || !MARQO_EMBEDDER_SECRET) {
+    return null;
+  }
+  const ac = new AbortController();
+  const t = setTimeout(() => ac.abort(), 30_000);
+  try {
+    const res = await fetch(MARQO_EMBEDDER_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-secret": MARQO_EMBEDDER_SECRET },
+      body: JSON.stringify({ image_b64: base64 }),
+      signal: ac.signal,
+    });
+    if (!res.ok) {
+      console.log(`      ⚠️  embedding failed: ${res.status}`);
+      return null;
+    }
+    const data = await res.json();
+    if (!Array.isArray(data.embedding) || data.embedding.length !== 768) return null;
+    return data.embedding;
+  } catch (err) {
+    console.log(`      ⚠️  embedding threw: ${err.message}`);
+    return null;
+  } finally {
+    clearTimeout(t);
+  }
+}
+
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 /** List all files recursively in the bucket (handles subfolders). */
@@ -230,19 +266,30 @@ async function tagImage(base64, mediaType) {
 
 async function main() {
   // Flag parsing
-  const retag    = process.argv.includes("--retag");
-  const withFit  = process.argv.includes("--with-fit");
-  const fitOnly  = process.argv.includes("--fit-only");
+  const retag     = process.argv.includes("--retag");
+  const withFit   = process.argv.includes("--with-fit");
+  const withEmbed = process.argv.includes("--with-embed");
+  const fitOnly   = process.argv.includes("--fit-only");
+  const embedOnly = process.argv.includes("--embed-only");
 
   if (fitOnly) {
     return runFitOnly();
+  }
+  if (embedOnly) {
+    return runEmbedOnly();
   }
 
   const modeTags = [
     retag && "retag",
     withFit && "with-fit",
+    withEmbed && "with-embed",
   ].filter(Boolean).join(", ");
   console.log(`\n🗄  David's Apothecary — Bulk Tagger${modeTags ? ` (${modeTags})` : ""}\n`);
+
+  if (withEmbed && (!MARQO_EMBEDDER_URL || !MARQO_EMBEDDER_SECRET)) {
+    console.error("❌  --with-embed requires MARQO_EMBEDDER_URL and MARQO_EMBEDDER_SECRET in .env.local");
+    process.exit(1);
+  }
 
   // Fetch Catherine's body context once if we need it for fit-inference
   let bodyContext = null;
@@ -308,6 +355,12 @@ async function main() {
         }
       }
 
+      // Phase B2 — optional visual embedding pass
+      let embedding = null;
+      if (withEmbed) {
+        embedding = await embedImage(base64);
+      }
+
       const payload = {
         user_id:       CATHERINE_USER_ID,
         photo_url:     publicUrl,
@@ -324,6 +377,7 @@ async function main() {
         brand:         tags.brand   ?? null,
         tagger_raw:    tags,
         ...(fitInference ? { fit_inference: fitInference } : {}),
+        ...(embedding   ? { embedding } : {}),
       };
 
       let dbErr;
@@ -433,6 +487,75 @@ async function runFitOnly() {
 
   console.log(`\n✨  Done.`);
   if (updated) console.log(`   ${updated} fit_inference refreshed`);
+  if (failed)  console.log(`   ${failed} failed — re-run to retry`);
+  console.log();
+}
+
+// ── --embed-only mode ─────────────────────────────────────────────────────────
+//
+// Skip recognition + fit-inference entirely. Iterate all existing wardrobe_items
+// rows and refresh the embedding column via the Modal worker. Use this for the
+// one-time back-fill after Phase B2 first deploys.
+
+async function runEmbedOnly() {
+  console.log(`\n🗄  David's Apothecary — Embedding Refresh (--embed-only)\n`);
+
+  if (!MARQO_EMBEDDER_URL || !MARQO_EMBEDDER_SECRET) {
+    console.error("❌  --embed-only requires MARQO_EMBEDDER_URL and MARQO_EMBEDDER_SECRET in .env.local");
+    process.exit(1);
+  }
+
+  const { data: items, error } = await supabase
+    .from("wardrobe_items")
+    .select("id,name,photo_url")
+    .eq("user_id", CATHERINE_USER_ID)
+    .eq("is_active", true);
+
+  if (error) throw error;
+  if (!items || items.length === 0) {
+    console.log("   No active wardrobe items found.\n");
+    return;
+  }
+  console.log(`   Found ${items.length} item(s) to embed.\n`);
+
+  let updated = 0;
+  let failed = 0;
+
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    const label = item.name ?? item.id.slice(0, 8);
+    process.stdout.write(`   ⏳  [${i + 1}/${items.length}] ${label} … `);
+
+    try {
+      const { base64 } = await fetchBase64(item.photo_url);
+      const embedding = await embedImage(base64);
+
+      if (!embedding) {
+        console.log(`⚠️  no embedding returned, skipped`);
+        failed++;
+        continue;
+      }
+
+      const { error: updateErr } = await supabase
+        .from("wardrobe_items")
+        .update({ embedding })
+        .eq("id", item.id)
+        .eq("user_id", CATHERINE_USER_ID);
+
+      if (updateErr) throw new Error(updateErr.message);
+
+      console.log(`✅  embedded (768-dim)`);
+      updated++;
+
+      if (i < items.length - 1) await new Promise((r) => setTimeout(r, 200));
+    } catch (err) {
+      console.log(`❌  ${err.message}`);
+      failed++;
+    }
+  }
+
+  console.log(`\n✨  Done.`);
+  if (updated) console.log(`   ${updated} embedding(s) refreshed`);
   if (failed)  console.log(`   ${failed} failed — re-run to retry`);
   console.log();
 }

@@ -89,7 +89,33 @@ function EditSheet({
   const [retagMessage, setRetagMessage] = useState<string | null>(null);
   // Phase B1b — David's fit reading. Local state so re-tag can refresh it.
   const [fitInference, setFitInference] = useState<FitInference | null>(item.fit_inference ?? null);
+  // Phase B2 — similar items via Marqo embeddings. Loaded on sheet open.
+  type SimilarItem = {
+    id: string; name: string | null; category: string;
+    subcategory: string | null; photo_url: string;
+    thumbnail_url: string | null; colors: string[]; score: number;
+  };
+  const [similar, setSimilar] = useState<SimilarItem[] | null>(null);
+  const [similarReason, setSimilarReason] = useState<string | null>(null);
   const sheetRef = useRef<HTMLDivElement>(null);
+
+  // Phase B2 — fetch the 5 most-similar items when the sheet opens
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/wardrobe/${item.id}/similar?limit=5`);
+        if (!res.ok) return;
+        const data = await res.json() as { items?: SimilarItem[]; reason?: string };
+        if (cancelled) return;
+        setSimilar(data.items ?? []);
+        setSimilarReason(data.reason ?? null);
+      } catch {
+        // silent — feature is additive
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [item.id]);
 
   // Prevent background scroll while sheet is open
   useEffect(() => {
@@ -512,6 +538,91 @@ function EditSheet({
                 David hasn't read this one yet. Tap "Re-tag with David" below.
               </p>
             )}
+          </div>
+
+          {/* Phase B2 — "Items like this" row (visual similarity via Marqo embeddings) */}
+          <div style={{ marginBottom: 20 }}>
+            <label style={label}>Items Like This</label>
+            {similar === null ? (
+              <p style={{
+                fontFamily: "var(--font-jost), sans-serif", fontSize: 11.5,
+                color: "#a89484", lineHeight: 1.5, fontStyle: "italic",
+                padding: "8px 0", margin: 0,
+              }}>
+                Looking…
+              </p>
+            ) : similar.length > 0 ? (
+              <div
+                style={{
+                  display: "flex",
+                  gap: 10,
+                  overflowX: "auto",
+                  paddingBottom: 4,
+                  scrollbarWidth: "none",
+                  msOverflowStyle: "none",
+                }}
+              >
+                {similar.map((s) => (
+                  <div
+                    key={s.id}
+                    style={{
+                      flex: "0 0 auto",
+                      width: 76,
+                      display: "flex",
+                      flexDirection: "column",
+                      alignItems: "center",
+                    }}
+                  >
+                    <div
+                      style={{
+                        width: 76, height: 76, borderRadius: 10, overflow: "hidden",
+                        background: s.colors[0] ?? "#cec5b0",
+                        border: "1px solid rgba(42,37,32,0.12)",
+                      }}
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={toThumbUrl(s.photo_url, 200) ?? s.photo_url}
+                        alt={s.name ?? s.category}
+                        style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                      />
+                    </div>
+                    <p style={{
+                      fontFamily: "var(--font-jost), sans-serif", fontSize: 9.5,
+                      color: "#8a7a6a", lineHeight: 1.3,
+                      marginTop: 4, marginBottom: 0,
+                      textAlign: "center",
+                      width: 76,
+                      overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                    }}>
+                      {s.name ?? s.category}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            ) : similarReason === "source_not_embedded" ? (
+              <p style={{
+                fontFamily: "var(--font-jost), sans-serif", fontSize: 11.5,
+                color: "#8a7a6a", lineHeight: 1.5, fontStyle: "italic",
+                padding: "8px 0", margin: 0,
+              }}>
+                David hasn't given this piece a visual fingerprint yet. Tap "Re-tag with David" below.
+              </p>
+            ) : (
+              <p style={{
+                fontFamily: "var(--font-jost), sans-serif", fontSize: 11.5,
+                color: "#8a7a6a", lineHeight: 1.5, fontStyle: "italic",
+                padding: "8px 0", margin: 0,
+              }}>
+                Nothing else in your closet looks like this one.
+              </p>
+            )}
+            <p style={{
+              fontFamily: "var(--font-jost), sans-serif", fontSize: 10,
+              color: "#a89484", lineHeight: 1.4, marginTop: 6, marginBottom: 0,
+            }}>
+              Matched by visual fingerprint — silhouette, colors, fabric vibe.
+            </p>
           </div>
 
           {/* Fit note — what's off about this piece, for David */}

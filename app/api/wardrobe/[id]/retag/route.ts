@@ -6,6 +6,7 @@ import {
   FIT_BODY_CONTEXT_SELECT,
   type FitBodyContext,
 } from "@/lib/fit-tagger";
+import { embedImage } from "@/lib/embedder";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -178,6 +179,19 @@ export async function POST(
       // Log but don't fail the request — fit-inference is additive.
       console.warn("[wardrobe retag] fit-inference skipped:",
         fitErr instanceof Error ? fitErr.message : String(fitErr));
+    }
+
+    // 4c. Phase B2 — visual embedding via Marqo-FashionSigLIP on Modal.
+    //     Best-effort: returns null if the embedder isn't configured or
+    //     the call fails. Stored as pgvector for similarity queries.
+    try {
+      const embedding = await embedImage(base64);
+      if (embedding) {
+        update.embedding = embedding;
+      }
+    } catch (embedErr) {
+      console.warn("[wardrobe retag] embedding skipped:",
+        embedErr instanceof Error ? embedErr.message : String(embedErr));
     }
 
     const { data: updated, error: updateErr } = await supabase
