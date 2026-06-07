@@ -43,3 +43,7 @@ next-env.d.ts
 # Local Netlify folder
 .netlify
 .env.local
+
+# python
+__pycache__/
+*.py[cod]
