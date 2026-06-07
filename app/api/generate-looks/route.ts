@@ -245,8 +245,9 @@ function buildPrefSummary(prefs: UserPrefs | null): string {
   return lines.join("\n");
 }
 
-const buildPrompt = (items: object[], season: string) =>
-  `It's ${season}. Here are Catherine's most-available pieces for today (${items.length} items — pre-filtered by season and recency):
+// weatherLine format: "Current weather: 72°F, partly cloudy" (or null if unavailable)
+const buildPrompt = (items: object[], season: string, weatherLine?: string | null) =>
+  `It's ${season}.${weatherLine ? ` ${weatherLine}.` : ""} Here are Catherine's most-available pieces for today (${items.length} items — pre-filtered by season and recency):
 ${JSON.stringify(items)}
 
 Create 3 complete, cohesive outfit looks. Return ONLY a JSON array — no markdown, no explanation.
@@ -409,7 +410,7 @@ const ANCHOR_SLOT_TEMPLATES: Record<string, Array<{ label: string; cat: string }
   accessories: [{ label: "Top", cat: "tops" }, { label: "Bottom", cat: "bottoms" }, { label: "Shoes", cat: "shoes" }],
 };
 
-function buildAnchorPrompt(items: object[], season: string, anchor: WardrobeRow): string {
+function buildAnchorPrompt(items: object[], season: string, anchor: WardrobeRow, weatherLine?: string | null): string {
   const templates = ANCHOR_SLOT_TEMPLATES[anchor.category] ?? [
     { label: "Top", cat: "tops" }, { label: "Bottom", cat: "bottoms" }, { label: "Shoes", cat: "shoes" },
   ];
@@ -432,7 +433,7 @@ function buildAnchorPrompt(items: object[], season: string, anchor: WardrobeRow)
     fit_inference_note: fitInference?.fit_note_for_catherine ?? undefined,
   });
 
-  return `It's ${season}. Catherine has chosen one anchor piece — it appears in every outfit.
+  return `It's ${season}.${weatherLine ? ` ${weatherLine}.` : ""} Catherine has chosen one anchor piece — it appears in every outfit.
 
 ANCHOR PIECE (locked into every look — do NOT include its uuid in your slot output):
 ${anchorDesc}
@@ -467,6 +468,39 @@ Rules:
 - Every item_id must be from the candidate list I gave you — never the anchor's id (${anchor.id})
 - No item_id may appear twice across all 3 looks
 - Every look must feel like a distinct mood — different occasion, energy, or formality`;
+}
+
+// ── live weather ──────────────────────────────────────────────────────────────
+
+/**
+ * Fetch current conditions for Bay Ridge, Brooklyn (Catherine's neighbourhood).
+ * Uses Next.js data cache (30-min revalidation) so rapid sequential calls are free.
+ * Best-effort: returns null on any error — the Stylist works fine without weather.
+ */
+async function fetchBayRidgeWeather(): Promise<string | null> {
+  try {
+    const key = process.env.OPENWEATHER_API_KEY;
+    if (!key) return null;
+
+    const res = await fetch(
+      `https://api.openweathermap.org/data/2.5/weather?lat=40.6357&lon=-74.0236&appid=${key}&units=imperial`,
+      { next: { revalidate: 1800 } } // Next.js fetch cache — serves stale for 30 min
+    );
+    if (!res.ok) return null;
+
+    const data = await res.json();
+    const temp     = Math.round(data.main?.temp ?? 0);
+    const desc     = (data.weather?.[0]?.description ?? "").trim();
+    const humidity = data.main?.humidity ?? 0;
+
+    const parts: string[] = [`${temp}°F`];
+    if (desc)         parts.push(desc);
+    if (humidity >= 70) parts.push("humid");
+
+    return `Current weather: ${parts.join(", ")}`;
+  } catch {
+    return null; // non-blocking — never let a weather failure block outfit generation
+  }
 }
 
 // ── today-cache helpers ───────────────────────────────────────────────────────
@@ -507,11 +541,13 @@ type CachedLookRow = {
 };
 
 /**
- * If we already generated 3 regular looks for Catherine today, hydrate and return them.
- * Returns null if today's set isn't ready yet.
+ * If we already generated regular looks for Catherine today, hydrate and return
+ * the most-recent 3. Returns null if today's set isn't ready yet.
  *
- * Anchor-mode looks (stylist_raw.anchor_item_id is set) are filtered out so they
- * never pollute the daily home-feed cache.
+ * - Fetches DESC so the most-recently-generated regular set is served.
+ *   This means a regenerate (which writes a new set) becomes the cache automatically.
+ * - Anchor-mode looks (stylist_raw.anchor_item_id is set) are filtered out so they
+ *   never pollute the daily home-feed cache.
  */
 async function loadTodaysLooks(itemMap: Map<string, WardrobeRow>): Promise<RealLook[] | null> {
   const { startIso, endIso } = getTodayBounds();
@@ -523,7 +559,7 @@ async function loadTodaysLooks(itemMap: Map<string, WardrobeRow>): Promise<RealL
     .is("trip_id", null)
     .gte("created_at", startIso)
     .lt("created_at", endIso)
-    .order("created_at", { ascending: true })
+    .order("created_at", { ascending: false }) // DESC: most-recent first
     .limit(10); // extra headroom — filter out anchor looks below before counting to 3
 
   if (error || !data) return null;
@@ -534,8 +570,11 @@ async function loadTodaysLooks(itemMap: Map<string, WardrobeRow>): Promise<RealL
   );
   if (regularRows.length < 3) return null;
 
+  // Take the most-recent 3, then reverse to restore creation order (look 1 → 2 → 3)
+  const recentThree = regularRows.slice(0, 3).reverse();
+
   const looks: RealLook[] = [];
-  for (const row of regularRows.slice(0, 3) as CachedLookRow[]) {
+  for (const row of recentThree as CachedLookRow[]) {
     const ids   = row.item_ids ?? [];
     const alts  = row.stylist_raw?.slot_alts ?? [];
     const labels = row.stylist_raw?.slot_labels ?? [];
@@ -570,8 +609,14 @@ async function loadTodaysLooks(itemMap: Map<string, WardrobeRow>): Promise<RealL
 
 // ── GET handler (daily home-feed looks) ──────────────────────────────────────
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
+    // ?refresh=1 bypasses the daily cache — used by the "None of these" regenerate flow.
+    // New looks are still written to the DB so wear/pass decisions can be recorded,
+    // and loadTodaysLooks (DESC order) will serve the freshest set on the next normal load.
+    const url     = new URL(request.url);
+    const refresh = url.searchParams.get("refresh") === "1";
+
     const season = getCurrentSeason();
 
     // 1. Fetch full wardrobe ordered by least-recently-worn.
@@ -589,15 +634,17 @@ export async function GET() {
       return NextResponse.json({ error: "Not enough wardrobe items yet" }, { status: 422 });
     }
 
-    // 1b. CACHE CHECK — if we already generated today's 3 looks, return them.
-    //     Skips the wardrobe -> Claude -> DB-insert path entirely.
+    // 1b. CACHE CHECK — skip when ?refresh=1 (regenerate mode).
+    //     On normal loads, if today's most-recent regular set exists, return it immediately.
     const itemMap = new Map(allItems.map((r) => [r.id, r]));
-    const cached = await loadTodaysLooks(itemMap);
-    if (cached) {
-      return NextResponse.json({
-        looks: cached,
-        meta: { season, cached: true, candidates: allItems.length },
-      });
+    if (!refresh) {
+      const cached = await loadTodaysLooks(itemMap);
+      if (cached) {
+        return NextResponse.json({
+          looks: cached,
+          meta: { season, cached: true, candidates: allItems.length },
+        });
+      }
     }
 
     // 2. Fetch Catherine's style preferences — degrade gracefully if missing
@@ -612,6 +659,10 @@ export async function GET() {
     const systemPrompt = prefSummary
       ? `${DAVID_SYSTEM}\n\nCatherine's current style settings: ${prefSummary}`
       : DAVID_SYSTEM;
+
+    // 2b. Fetch live weather — best-effort, non-blocking.
+    //     Only called here (after cache miss) so we never waste an OWM call on a cache hit.
+    const weatherLine = await fetchBayRidgeWeather();
 
     // 3. Build the ~35–40 item candidate pool (constant size as wardrobe grows)
     const candidates = buildCandidatePool(allItems, season);
@@ -638,12 +689,12 @@ export async function GET() {
       };
     });
 
-    // 5. Call Claude with the focused candidate pool + Catherine's preferences
+    // 5. Call Claude with the focused candidate pool + Catherine's preferences + weather
     const msg = await anthropic.messages.create({
       model: "claude-haiku-4-5-20251001",
       max_tokens: 1200,
       system: systemPrompt,
-      messages: [{ role: "user", content: buildPrompt(condensed, season) }],
+      messages: [{ role: "user", content: buildPrompt(condensed, season, weatherLine) }],
     });
 
     const rawText = msg.content[0].type === "text" ? msg.content[0].text : "[]";
@@ -733,11 +784,13 @@ export async function GET() {
       })),
     }));
 
-    console.log(`[generate-looks] claude=${claudeLooks.length} resolved=${resolvedLooks.length} candidates=${candidates.length}`);
+    console.log(`[generate-looks] claude=${claudeLooks.length} resolved=${resolvedLooks.length} candidates=${candidates.length} weather=${weatherLine ? "yes" : "no"} refresh=${refresh}`);
 
     // 7. Persist look rows. Store slot_labels and slot_alts alongside the
     //    primary item_ids so the daily cache can reconstruct the full slot
     //    shape (including swap options) without re-calling the LLM.
+    //    Regenerated looks are also written — loadTodaysLooks (DESC) will serve
+    //    the freshest set on the next normal load, so the new set becomes canonical.
     const finalLooks: RealLook[] = [];
 
     for (const look of resolvedLooks) {
@@ -770,7 +823,7 @@ export async function GET() {
 
     return NextResponse.json({
       looks: finalLooks,
-      meta: { season, cached: false, candidates: candidates.length },
+      meta: { season, cached: false, candidates: candidates.length, refresh },
     });
 
   } catch (err) {
@@ -835,6 +888,9 @@ export async function POST(request: Request) {
       ? `${DAVID_SYSTEM}\n\nCatherine's current style settings: ${prefSummary}`
       : DAVID_SYSTEM;
 
+    // 3b. Fetch live weather — best-effort, same 30-min cache as GET handler
+    const weatherLine = await fetchBayRidgeWeather();
+
     // 4. Candidate pool — anchor's category is excluded; the anchor fills that slot
     const candidates = buildCandidatePool(allItems, season, anchorItem);
 
@@ -862,7 +918,7 @@ export async function POST(request: Request) {
       model: "claude-haiku-4-5-20251001",
       max_tokens: 1200,
       system: systemPrompt,
-      messages: [{ role: "user", content: buildAnchorPrompt(condensed, season, anchorItem) }],
+      messages: [{ role: "user", content: buildAnchorPrompt(condensed, season, anchorItem, weatherLine) }],
     });
 
     const rawText = msg.content[0].type === "text" ? msg.content[0].text : "[]";
@@ -949,7 +1005,7 @@ export async function POST(request: Request) {
       ],
     }));
 
-    console.log(`[generate-looks POST] anchor=${anchorItem.name ?? anchorItem.id} resolved=${resolvedLooks.length} candidates=${candidates.length}`);
+    console.log(`[generate-looks POST] anchor=${anchorItem.name ?? anchorItem.id} resolved=${resolvedLooks.length} candidates=${candidates.length} weather=${weatherLine ? "yes" : "no"}`);
 
     // 8. Persist to looks table. anchor_item_id in stylist_raw marks these as
     //    anchor-mode looks so loadTodaysLooks (GET handler) excludes them from

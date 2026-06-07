@@ -263,6 +263,9 @@ function SwipePageInner() {
   const [decisions, setDecisions] = useState<Record<number, Decision>>({});
   const [altMap, setAltMap] = useState<Record<string, number>>({});
 
+  // True while the "None of these" regenerate fetch is in flight
+  const [isRegenerating, setIsRegenerating] = useState(false);
+
   const [cardDx, setCardDx] = useState(0);
   const [isDraggingCard, setIsDraggingCard] = useState(false);
   const [cardExiting, setCardExiting] = useState<Decision | null>(null);
@@ -363,6 +366,34 @@ function SwipePageInner() {
     [look, altMap]
   );
 
+  // ── regenerate (None of these) ──
+  // Fetches a completely fresh set from the server, bypassing both the
+  // localStorage cache and the server-side daily DB cache (?refresh=1).
+  // No preference signal is recorded for the current set — just silently replace.
+  // The regenerated looks ARE written to DB so wear/pass decisions still record.
+  const handleRegenerate = useCallback(async () => {
+    if (isRegenerating) return;
+    setIsRegenerating(true);
+    setLooks(null);
+    setCurrentIndex(0);
+    setDecisions({});
+    setAltMap({});
+    setCardDx(0);
+    setCardExiting(null);
+    try {
+      const r = await fetch("/api/generate-looks?refresh=1");
+      const json = await r.json();
+      if (json.error) throw new Error(json.error);
+      // Intentionally NOT calling cacheLooks() — the home page should still
+      // show the original daily set; regeneration is ephemeral for this session.
+      setLooks(json.looks);
+    } catch (err) {
+      setLoadError(err instanceof Error ? err.message : "Something went wrong");
+    } finally {
+      setIsRegenerating(false);
+    }
+  }, [isRegenerating]);
+
   const onCardPD = (e: React.PointerEvent<HTMLDivElement>) => {
     if (itemDraggingRef.current) return;
     e.currentTarget.setPointerCapture(e.pointerId);
@@ -390,6 +421,8 @@ function SwipePageInner() {
   // Loading message varies by mode
   const loadingMessage = anchorId
     ? "David is styling around your pick…"
+    : isRegenerating
+    ? "David is finding you something different…"
     : "David is pulling your looks…";
 
   // ── render ──
@@ -415,7 +448,10 @@ function SwipePageInner() {
       <div className="flex flex-col bg-cream" style={{ height: "100dvh", maxWidth: 390, margin: "0 auto" }}>
         {/* header skeleton */}
         <div className="flex items-center shrink-0" style={{ padding: "12px 18px 8px", gap: 12 }}>
-          <button onClick={() => router.push("/")} style={{ width: 34, height: 34, borderRadius: "50%", border: "1.5px solid rgba(42,37,32,0.2)", background: "transparent", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20, color: "#2a2520", flexShrink: 0 }}>
+          <button
+            onClick={() => router.push(anchorId ? "/wardrobe" : "/")}
+            style={{ width: 34, height: 34, borderRadius: "50%", border: "1.5px solid rgba(42,37,32,0.2)", background: "transparent", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20, color: "#2a2520", flexShrink: 0 }}
+          >
             ‹
           </button>
         </div>
@@ -581,13 +617,53 @@ function SwipePageInner() {
       </div>
 
       {/* ── footer ── */}
-      <div className="flex gap-3 shrink-0" style={{ padding: "14px 18px", paddingBottom: "max(18px, env(safe-area-inset-bottom))" }}>
-        <button onClick={() => commitLook("pass")} style={{ flex: 1, borderRadius: 12, padding: "15px 0", border: "1.5px solid #c94040", background: "transparent", color: "#c94040", fontFamily: "var(--font-jost), sans-serif", fontSize: 14, fontWeight: 600, cursor: "pointer" }}>
-          ✕ Pass
-        </button>
-        <button onClick={() => commitLook("wear")} style={{ flex: 1.4, borderRadius: 12, padding: "15px 0", border: "none", background: "#3d7a55", color: "#faf7f2", fontFamily: "var(--font-jost), sans-serif", fontSize: 14, fontWeight: 600, cursor: "pointer" }}>
-          ✓ Wear this
-        </button>
+      <div className="shrink-0" style={{ padding: "14px 18px 0" }}>
+        {/* Pass / Wear buttons */}
+        <div
+          className="flex gap-3"
+          style={{
+            paddingBottom: anchorId
+              ? "max(18px, env(safe-area-inset-bottom))"
+              : "4px",
+          }}
+        >
+          <button
+            onClick={() => commitLook("pass")}
+            style={{ flex: 1, borderRadius: 12, padding: "15px 0", border: "1.5px solid #c94040", background: "transparent", color: "#c94040", fontFamily: "var(--font-jost), sans-serif", fontSize: 14, fontWeight: 600, cursor: "pointer" }}
+          >
+            ✕ Pass
+          </button>
+          <button
+            onClick={() => commitLook("wear")}
+            style={{ flex: 1.4, borderRadius: 12, padding: "15px 0", border: "none", background: "#3d7a55", color: "#faf7f2", fontFamily: "var(--font-jost), sans-serif", fontSize: 14, fontWeight: 600, cursor: "pointer" }}
+          >
+            ✓ Wear this
+          </button>
+        </div>
+
+        {/* None of these — only shown in normal mode (not anchor mode) */}
+        {!anchorId && (
+          <div style={{ textAlign: "center", paddingBottom: "max(14px, env(safe-area-inset-bottom))" }}>
+            <button
+              onClick={handleRegenerate}
+              disabled={isRegenerating}
+              style={{
+                background: "none",
+                border: "none",
+                cursor: isRegenerating ? "wait" : "pointer",
+                fontFamily: "var(--font-jost), sans-serif",
+                fontSize: 12,
+                color: isRegenerating ? "#c4a882" : "#8a7a6a",
+                padding: "8px 0",
+                letterSpacing: "0.02em",
+                textDecoration: "underline",
+                textUnderlineOffset: "3px",
+              }}
+            >
+              {isRegenerating ? "Finding more…" : "None of these — show me something different"}
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
