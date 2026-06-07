@@ -77,6 +77,13 @@ image = (
         "pillow==10.4.0",
         "fastapi[standard]==0.115.0",
         "huggingface_hub==0.25.2",
+        # SigLIP-family models in open_clip use HuggingFace's SentencePiece
+        # tokenizer (via `from transformers import AutoTokenizer`), so the
+        # tokenizer side of the model fails with ModuleNotFoundError on
+        # `transformers` (and downstream `sentencepiece`) if these aren't
+        # in the image. open_clip_torch does NOT pull them automatically.
+        "transformers==4.45.2",
+        "sentencepiece==0.2.0",
     )
     .run_function(_download_model)  # bakes weights into the image
 )
