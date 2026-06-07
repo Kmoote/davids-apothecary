@@ -323,12 +323,18 @@ function isFatigued(r: WardrobeRow): boolean {
  * - Among the rest, sorted by least-recently-worn (nulls = never worn = top priority)
  * - Capped per category so total stays ~35–40 items regardless of wardrobe size
  * - Falls back to off-season items if a category is short on season-appropriate pieces
+ *
+ * anchorItem (optional): when provided, that category is skipped entirely —
+ * the anchor fills that slot and the candidate pool only covers the other slots.
  */
-function buildCandidatePool(all: WardrobeRow[], season: string): WardrobeRow[] {
+function buildCandidatePool(all: WardrobeRow[], season: string, anchorItem?: WardrobeRow): WardrobeRow[] {
   const candidates: WardrobeRow[] = [];
 
   for (const [cat, limit] of Object.entries(CATEGORY_LIMITS)) {
-    const inCat = all.filter((r) => r.category === cat);
+    // In anchor mode, skip the anchor's category — it's already placed.
+    if (anchorItem && cat === anchorItem.category) continue;
+
+    const inCat = all.filter((r) => r.category === cat && r.id !== anchorItem?.id);
 
     inCat.sort((a, b) => {
       // Fatigued items go last regardless of recency
@@ -379,6 +385,90 @@ function toSlotItem(row: WardrobeRow, slot: string): RealSlotItem {
   };
 }
 
+// ── anchor-mode helpers ───────────────────────────────────────────────────────
+
+/** Convert a wardrobe category to the slot label used in looks. */
+function categoryToSlotLabel(category: string): string {
+  const map: Record<string, string> = {
+    tops: "Top", bottoms: "Bottom", dresses: "Dress",
+    shoes: "Shoes", outerwear: "Layer", accessories: "Accessory",
+  };
+  return map[category] ?? "Piece";
+}
+
+/**
+ * Slot templates for anchor mode — what Claude fills when the anchor occupies
+ * a given category. Claude fills exactly 3 slots; the anchor adds the 4th.
+ */
+const ANCHOR_SLOT_TEMPLATES: Record<string, Array<{ label: string; cat: string }>> = {
+  tops:        [{ label: "Bottom", cat: "bottoms" }, { label: "Shoes", cat: "shoes" }, { label: "Layer", cat: "outerwear or accessories" }],
+  bottoms:     [{ label: "Top", cat: "tops" }, { label: "Shoes", cat: "shoes" }, { label: "Layer", cat: "outerwear or accessories" }],
+  dresses:     [{ label: "Shoes", cat: "shoes" }, { label: "Layer", cat: "outerwear" }, { label: "Accessory", cat: "accessories" }],
+  shoes:       [{ label: "Top", cat: "tops" }, { label: "Bottom", cat: "bottoms" }, { label: "Layer", cat: "outerwear or accessories" }],
+  outerwear:   [{ label: "Top", cat: "tops" }, { label: "Bottom", cat: "bottoms" }, { label: "Shoes", cat: "shoes" }],
+  accessories: [{ label: "Top", cat: "tops" }, { label: "Bottom", cat: "bottoms" }, { label: "Shoes", cat: "shoes" }],
+};
+
+function buildAnchorPrompt(items: object[], season: string, anchor: WardrobeRow): string {
+  const templates = ANCHOR_SLOT_TEMPLATES[anchor.category] ?? [
+    { label: "Top", cat: "tops" }, { label: "Bottom", cat: "bottoms" }, { label: "Shoes", cat: "shoes" },
+  ];
+  const slotLines = templates
+    .map((t, i) => `  slot ${i + 1} label: "${t.label}" — pick from category: ${t.cat}`)
+    .join("\n");
+
+  const fitInference = anchor.fit_inference as { fit_note_for_catherine?: string } | null;
+  const anchorDesc = JSON.stringify({
+    id:                 anchor.id,
+    name:               anchor.name ?? anchor.category,
+    category:           anchor.category,
+    subcategory:        anchor.subcategory,
+    colors:             anchor.colors,
+    occasion_tags:      anchor.occasion_tags,
+    formality:          anchor.formality,
+    pattern:            anchor.pattern,
+    fabric:             anchor.fabric,
+    fit_note:           anchor.fit_note ?? undefined,
+    fit_inference_note: fitInference?.fit_note_for_catherine ?? undefined,
+  });
+
+  return `It's ${season}. Catherine has chosen one anchor piece — it appears in every outfit.
+
+ANCHOR PIECE (locked into every look — do NOT include its uuid in your slot output):
+${anchorDesc}
+
+Here are ${items.length} available pieces to build around it:
+${JSON.stringify(items)}
+
+Create 3 complete outfits, each built around the anchor. Every david_note must reference the anchor — how the other pieces play off it and why the combination works. Return ONLY a JSON array — no markdown, no explanation.
+
+CRITICAL: Every look needs EXACTLY 3 slots (the anchor fills the 4th automatically).
+
+Slot assignments for all 3 looks:
+${slotLines}
+
+[
+  {
+    "name": "short evocative look name (2–3 words)",
+    "tag": "one occasion tag: Work Ready | Weekend Easy | Evening Out | Casual Cool | Smart Casual",
+    "david_note": "David's styling rationale — must reference the anchor piece by name or its quality",
+    "closing_line": "David's send-off line — one sentence, personal to Catherine",
+    "slots": [
+      { "label": "...", "item_id": "<uuid from the candidate list — NOT the anchor uuid>" },
+      { "label": "...", "item_id": "<uuid>" },
+      { "label": "...", "item_id": "<uuid>" }
+    ]
+  },
+  { ... },
+  { ... }
+]
+
+Rules:
+- Every item_id must be from the candidate list I gave you — never the anchor's id (${anchor.id})
+- No item_id may appear twice across all 3 looks
+- Every look must feel like a distinct mood — different occasion, energy, or formality`;
+}
+
 // ── today-cache helpers ───────────────────────────────────────────────────────
 
 /** UTC midnight bookends for "today" — used to find looks generated for the current day. */
@@ -412,12 +502,16 @@ type CachedLookRow = {
     season?: string;
     slot_labels?: string[];
     slot_alts?: string[][];
+    anchor_item_id?: string; // set on anchor-mode looks — excluded from daily home-feed cache
   } | null;
 };
 
 /**
- * If we already generated 3 looks for Catherine today, hydrate and return them.
+ * If we already generated 3 regular looks for Catherine today, hydrate and return them.
  * Returns null if today's set isn't ready yet.
+ *
+ * Anchor-mode looks (stylist_raw.anchor_item_id is set) are filtered out so they
+ * never pollute the daily home-feed cache.
  */
 async function loadTodaysLooks(itemMap: Map<string, WardrobeRow>): Promise<RealLook[] | null> {
   const { startIso, endIso } = getTodayBounds();
@@ -430,12 +524,18 @@ async function loadTodaysLooks(itemMap: Map<string, WardrobeRow>): Promise<RealL
     .gte("created_at", startIso)
     .lt("created_at", endIso)
     .order("created_at", { ascending: true })
-    .limit(3);
+    .limit(10); // extra headroom — filter out anchor looks below before counting to 3
 
-  if (error || !data || data.length < 3) return null;
+  if (error || !data) return null;
+
+  // Filter out anchor-mode looks so they don't count toward the daily set.
+  const regularRows = data.filter(
+    (row) => !(row as CachedLookRow).stylist_raw?.anchor_item_id
+  );
+  if (regularRows.length < 3) return null;
 
   const looks: RealLook[] = [];
-  for (const row of data as CachedLookRow[]) {
+  for (const row of regularRows.slice(0, 3) as CachedLookRow[]) {
     const ids   = row.item_ids ?? [];
     const alts  = row.stylist_raw?.slot_alts ?? [];
     const labels = row.stylist_raw?.slot_labels ?? [];
@@ -468,7 +568,7 @@ async function loadTodaysLooks(itemMap: Map<string, WardrobeRow>): Promise<RealL
   return looks;
 }
 
-// ── handler ───────────────────────────────────────────────────────────────────
+// ── GET handler (daily home-feed looks) ──────────────────────────────────────
 
 export async function GET() {
   try {
@@ -676,6 +776,231 @@ export async function GET() {
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
     console.error("[generate-looks]", message);
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+}
+
+// ── POST handler (anchor-item outfit generation) ──────────────────────────────
+//
+// Called when Catherine selects a specific piece and wants David to build
+// outfits around it. Unlike the GET handler, this always runs fresh (no
+// daily cache) and marks generated looks with anchor_item_id in stylist_raw
+// so they never pollute the home-feed cache.
+
+export async function POST(request: Request) {
+  try {
+    const body = await request.json();
+    const anchorItemId: string | undefined = body.anchorItemId;
+
+    if (!anchorItemId) {
+      return NextResponse.json({ error: "anchorItemId is required" }, { status: 400 });
+    }
+
+    const season = getCurrentSeason();
+
+    // 1. Fetch the anchor item — must belong to Catherine and be active
+    const { data: anchorRow, error: anchorErr } = await supabase
+      .from("wardrobe_items")
+      .select("id,name,category,subcategory,photo_url,thumbnail_url,colors,occasion_tags,formality,season_fit,pattern,fabric,last_worn_at,fit_note,fit_inference,wear_count,pass_count")
+      .eq("id", anchorItemId)
+      .eq("user_id", CATHERINE_USER_ID)
+      .eq("is_active", true)
+      .single();
+
+    if (anchorErr || !anchorRow) {
+      return NextResponse.json({ error: "Anchor item not found" }, { status: 404 });
+    }
+    const anchorItem = anchorRow as WardrobeRow;
+
+    // 2. Fetch full wardrobe
+    const { data: rows, error: dbErr } = await supabase
+      .from("wardrobe_items")
+      .select("id,name,category,subcategory,photo_url,thumbnail_url,colors,occasion_tags,formality,season_fit,pattern,fabric,last_worn_at,fit_note,fit_inference,wear_count,pass_count")
+      .eq("user_id", CATHERINE_USER_ID)
+      .eq("is_active", true)
+      .order("last_worn_at", { ascending: true, nullsFirst: true });
+
+    if (dbErr) throw new Error(`DB: ${dbErr.message}`);
+    const allItems = (rows ?? []) as WardrobeRow[];
+
+    // 3. Fetch preferences
+    const { data: prefsRow } = await supabase
+      .from("user_preferences")
+      .select(PREFS_SELECT)
+      .eq("user_id", CATHERINE_USER_ID)
+      .single();
+
+    const prefSummary = buildPrefSummary((prefsRow ?? null) as UserPrefs | null);
+    const systemPrompt = prefSummary
+      ? `${DAVID_SYSTEM}\n\nCatherine's current style settings: ${prefSummary}`
+      : DAVID_SYSTEM;
+
+    // 4. Candidate pool — anchor's category is excluded; the anchor fills that slot
+    const candidates = buildCandidatePool(allItems, season, anchorItem);
+
+    // 5. Condensed payload — only the non-anchor categories
+    const condensed = candidates.map((r) => {
+      const fitInference = r.fit_inference as { fit_note_for_catherine?: string } | null;
+      return {
+        id:                 r.id,
+        name:               r.name ?? r.category,
+        category:           r.category,
+        subcategory:        r.subcategory,
+        colors:             r.colors,
+        occasion_tags:      r.occasion_tags,
+        formality:          r.formality,
+        season_fit:         r.season_fit,
+        pattern:            r.pattern,
+        fabric:             r.fabric,
+        fit_note:           r.fit_note ?? undefined,
+        fit_inference_note: fitInference?.fit_note_for_catherine ?? undefined,
+      };
+    });
+
+    // 6. Call Claude — anchor prompt asks for 3 slots per look (anchor is the 4th)
+    const msg = await anthropic.messages.create({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 1200,
+      system: systemPrompt,
+      messages: [{ role: "user", content: buildAnchorPrompt(condensed, season, anchorItem) }],
+    });
+
+    const rawText = msg.content[0].type === "text" ? msg.content[0].text : "[]";
+    const jsonMatch = rawText.match(/\[[\s\S]*\]/);
+    if (!jsonMatch) throw new Error("Claude returned no JSON array");
+
+    const claudeLooks = JSON.parse(jsonMatch[0]) as Array<{
+      name: string; tag: string; david_note: string; closing_line: string;
+      slots: Array<{ label: string; item_id: string }>;
+    }>;
+
+    // 7. Resolve looks — inject anchor as first slot in every look.
+    //
+    //    Two-pass approach (same pattern as GET handler):
+    //    Pass 1 — primaries: anchor (always) + Claude's 3 non-anchor picks per look.
+    //    Pass 2 — alts: per slot, excluding all primaries.
+    const anchorLabel   = categoryToSlotLabel(anchorItem.category);
+    const candidateMap  = new Map(candidates.map((r) => [r.id, r]));
+    // Seed usedPrimaries with the anchor id so it can never appear as a non-anchor pick.
+    const usedPrimaries = new Set<string>([anchorItem.id]);
+
+    type AnchorCore = {
+      name: string; tag: string; david_note: string; closing_line: string;
+      primaries: Array<{ slot: string; row: WardrobeRow }>;
+    };
+    const cores: AnchorCore[] = [];
+
+    // Pass 1 — primaries
+    for (const cl of claudeLooks.slice(0, 3)) {
+      // Always start with the anchor
+      const primaries: Array<{ slot: string; row: WardrobeRow }> = [
+        { slot: anchorLabel, row: anchorItem },
+      ];
+
+      for (const s of (cl.slots ?? []).slice(0, 3)) {
+        // Guard: Claude may hallucinate the anchor's own id despite instructions
+        if (s.item_id === anchorItem.id) continue;
+        const row = candidateMap.get(s.item_id);
+        if (!row || usedPrimaries.has(row.id)) continue;
+        usedPrimaries.add(row.id);
+        primaries.push({ slot: s.label, row });
+      }
+
+      if (primaries.length < 2) continue; // need at least anchor + 1 other
+      cores.push({
+        name:         cl.name         ?? "The Edit",
+        tag:          cl.tag          ?? "Casual Cool",
+        david_note:   cl.david_note   ?? "",
+        closing_line: cl.closing_line ?? "",
+        primaries,
+      });
+    }
+
+    if (cores.length === 0) throw new Error("Could not resolve any anchor looks");
+
+    // Anchor alts — same category, not the anchor itself
+    const anchorAlts = pickAlts(anchorItem.category, new Set([anchorItem.id]), allItems, 2);
+
+    // Pass 2 — build slot arrays with alts
+    const resolvedLooks: Omit<RealLook, "look_id">[] = cores.map((core) => ({
+      name:         core.name,
+      tag:          core.tag,
+      david_note:   core.david_note,
+      closing_line: core.closing_line,
+      slots: [
+        // Anchor slot is always first so the swipe page can find it by index
+        {
+          slot: anchorLabel,
+          items: [
+            toSlotItem(anchorItem, anchorLabel),
+            ...anchorAlts.map((a) => toSlotItem(a, anchorLabel)),
+          ],
+        },
+        // Remaining slots from Claude's picks
+        ...core.primaries.slice(1).map(({ slot, row }) => ({
+          slot,
+          items: [
+            toSlotItem(row, slot),
+            ...pickAlts(row.category, usedPrimaries, allItems, 2).map((a) =>
+              toSlotItem(a, slot)
+            ),
+          ],
+        })),
+      ],
+    }));
+
+    console.log(`[generate-looks POST] anchor=${anchorItem.name ?? anchorItem.id} resolved=${resolvedLooks.length} candidates=${candidates.length}`);
+
+    // 8. Persist to looks table. anchor_item_id in stylist_raw marks these as
+    //    anchor-mode looks so loadTodaysLooks (GET handler) excludes them from
+    //    the daily home-feed cache.
+    const finalLooks: RealLook[] = [];
+
+    for (const look of resolvedLooks) {
+      const itemIds    = look.slots.map((s) => s.items[0].item_id);
+      const slotLabels = look.slots.map((s) => s.slot);
+      const slotAlts   = look.slots.map((s) => s.items.slice(1).map((it) => it.item_id));
+
+      const { data: inserted, error: insErr } = await supabase
+        .from("looks")
+        .insert({
+          user_id:     CATHERINE_USER_ID,
+          name:        look.name,
+          theme:       look.tag,
+          item_ids:    itemIds,
+          occasion:    look.tag,
+          stylist_raw: {
+            david_note:     look.david_note,
+            closing_line:   look.closing_line,
+            season,
+            slot_labels:    slotLabels,
+            slot_alts:      slotAlts,
+            anchor_item_id: anchorItem.id, // ← marks look as anchor-mode; excluded from daily cache
+          },
+        })
+        .select("id")
+        .single();
+
+      if (insErr) throw new Error(`looks insert: ${insErr.message}`);
+      finalLooks.push({ ...look, look_id: inserted.id });
+    }
+
+    return NextResponse.json({
+      looks: finalLooks,
+      meta: {
+        season,
+        anchor: {
+          id:            anchorItem.id,
+          name:          anchorItem.name ?? anchorItem.category,
+          category:      anchorItem.category,
+          thumbnail_url: anchorItem.thumbnail_url ?? anchorItem.photo_url,
+        },
+      },
+    });
+
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Unknown error";
+    console.error("[generate-looks POST]", message);
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

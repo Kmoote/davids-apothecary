@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { supabase, CATHERINE_USER_ID } from "@/lib/supabase";
 import { toThumbUrl } from "@/lib/looks";
 import type { FitInference } from "@/lib/fit-tagger";
@@ -71,6 +72,7 @@ function EditSheet({
   onClose: () => void;
   onSaved: (updated: Partial<WardrobeItem>) => void;
 }) {
+  const router = useRouter();
   const [form, setForm] = useState<EditState>({
     name:          item.name ?? "",
     brand:         item.brand ?? "",
@@ -133,6 +135,12 @@ function EditSheet({
           : [...current, value],
       };
     });
+  }
+
+  // Navigate to swipe page in anchor mode. The swipe page calls POST itself
+  // and handles the loading state — no async work needed here.
+  function handleStyleAround() {
+    router.push(`/swipe?anchor=${item.id}`);
   }
 
   async function handleRetag() {
@@ -622,6 +630,31 @@ function EditSheet({
               color: "#a89484", lineHeight: 1.4, marginTop: 6, marginBottom: 0,
             }}>
               Matched by visual fingerprint — silhouette, colors, fabric vibe.
+            </p>
+          </div>
+
+          {/* Style Around This — anchor-item Stylist ── */}
+          <div style={{ marginBottom: 20 }}>
+            <button
+              onClick={handleStyleAround}
+              style={{
+                width: "100%", padding: "13px 0", borderRadius: 12,
+                border: "none", background: "#c4a882",
+                color: "#2a2520",
+                fontFamily: "var(--font-jost), sans-serif", fontSize: 13,
+                fontWeight: 600, cursor: "pointer",
+                letterSpacing: "0.04em",
+                display: "flex", alignItems: "center", justifyContent: "center", gap: 6,
+              }}
+            >
+              <span style={{ fontSize: 14 }}>✦</span>
+              Style Around This Piece
+            </button>
+            <p style={{
+              fontFamily: "var(--font-jost), sans-serif", fontSize: 10,
+              color: "#8a7a6a", marginTop: 6, lineHeight: 1.4,
+            }}>
+              Ask David to build today's outfits around this piece as the starting point.
             </p>
           </div>
 

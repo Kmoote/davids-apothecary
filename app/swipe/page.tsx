@@ -17,6 +17,14 @@ const ITEM_THRESHOLD = 40;
 
 type Decision = "wear" | "pass";
 
+// Meta returned by POST /api/generate-looks (anchor mode)
+type AnchorMeta = {
+  id: string;
+  name: string;
+  category: string;
+  thumbnail_url: string;
+} | null;
+
 // ── individual item tile ──────────────────────────────────────────────────────
 
 function SwipeableItem({
@@ -24,11 +32,13 @@ function SwipeableItem({
   onSwap,
   onDragStart,
   onDragEnd,
+  isAnchor,
 }: {
   item: RealSlotItem;
   onSwap: () => void;
   onDragStart: () => void;
   onDragEnd: () => void;
+  isAnchor?: boolean;
 }) {
   const [dx, setDx] = useState(0);
   const [dragging, setDragging] = useState(false);
@@ -87,6 +97,9 @@ function SwipeableItem({
         cursor: dragging ? "grabbing" : "grab",
         touchAction: "none",
         userSelect: "none",
+        // Anchor item gets a gold ring to visually distinguish it
+        outline: isAnchor ? "2px solid #c4a882" : "none",
+        outlineOffset: isAnchor ? "-2px" : undefined,
         transform: exiting
           ? "translateX(-110%)"
           : entering
@@ -117,18 +130,28 @@ function SwipeableItem({
         }}
       />
 
-      {/* slot label top-left */}
+      {/* slot label / anchor badge top-left */}
       <div style={{ position: "absolute", top: 5, left: 6, pointerEvents: "none" }}>
-        <span style={{
-          fontFamily: "var(--font-jost), sans-serif",
-          fontSize: 7, fontWeight: 700, letterSpacing: "0.1em",
-          color: "#c4a882", textTransform: "uppercase",
-        }}>
-          {item.slot}
-        </span>
+        {isAnchor ? (
+          <span style={{
+            fontFamily: "var(--font-jost), sans-serif",
+            fontSize: 7, fontWeight: 700, letterSpacing: "0.08em",
+            color: "#c4a882", textTransform: "uppercase",
+          }}>
+            ✦ anchor
+          </span>
+        ) : (
+          <span style={{
+            fontFamily: "var(--font-jost), sans-serif",
+            fontSize: 7, fontWeight: 700, letterSpacing: "0.1em",
+            color: "#c4a882", textTransform: "uppercase",
+          }}>
+            {item.slot}
+          </span>
+        )}
       </div>
 
-      {/* swap hint */}
+      {/* swap hint (hidden for anchor item — it can still be swapped for similar pieces) */}
       <div style={{
         position: "absolute", top: 5, right: 5,
         opacity: dragging ? swapHintOpacity * 0.9 : 0.35,
@@ -166,12 +189,14 @@ function FlatLay({
   onSwap,
   onItemDragStart,
   onItemDragEnd,
+  anchorItemId,
 }: {
   look: RealLook;
   altMap: Record<string, number>;
   onSwap: (slotIdx: number) => void;
   onItemDragStart: () => void;
   onItemDragEnd: () => void;
+  anchorItemId?: string;
 }) {
   return (
     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, padding: 14, height: "100%" }}>
@@ -179,6 +204,9 @@ function FlatLay({
         const key = `${look.look_id}_${i}`;
         const itemIdx = altMap[key] ?? 0;
         const item = slot.items[itemIdx % slot.items.length];
+        // An item is the anchor if its id matches anchorItemId OR if the current
+        // alt selection shows the anchor item (e.g. they swiped back to it).
+        const isAnchor = !!anchorItemId && item.item_id === anchorItemId;
         return (
           <SwipeableItem
             key={i}
@@ -186,6 +214,7 @@ function FlatLay({
             onSwap={() => onSwap(i)}
             onDragStart={onItemDragStart}
             onDragEnd={onItemDragEnd}
+            isAnchor={isAnchor}
           />
         );
       })}
@@ -195,7 +224,7 @@ function FlatLay({
 
 // ── loading skeleton ──────────────────────────────────────────────────────────
 
-function LoadingSkeleton() {
+function LoadingSkeleton({ message }: { message?: string }) {
   return (
     <div className="flex flex-col items-center justify-center gap-4" style={{ padding: "60px 0" }}>
       <DavidAvatar size={42} />
@@ -209,7 +238,7 @@ function LoadingSkeleton() {
         ))}
       </div>
       <p style={{ fontFamily: "var(--font-jost), sans-serif", fontSize: 13, color: "#8a7a6a", textAlign: "center" }}>
-        David is pulling your looks…
+        {message ?? "David is pulling your looks…"}
       </p>
     </div>
   );
@@ -223,6 +252,10 @@ function SwipePageInner() {
 
   const [looks, setLooks] = useState<RealLook[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [anchorMeta, setAnchorMeta] = useState<AnchorMeta>(null);
+
+  // Read ?anchor=<id> — when present, swipe page fetches via POST (anchor mode)
+  const anchorId = searchParams.get("anchor");
 
   // Read ?look=N from the URL so tapping Look 2 or 3 on home starts there
   const startIndex = Math.max(0, parseInt(searchParams.get("look") ?? "0", 10) || 0);
@@ -243,6 +276,25 @@ function SwipePageInner() {
 
   // ── fetch looks ──
   useEffect(() => {
+    if (anchorId) {
+      // Anchor mode: always fresh, call POST with the anchor item id.
+      // Never read from or write to the normal localStorage cache.
+      fetch("/api/generate-looks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ anchorItemId: anchorId }),
+      })
+        .then((r) => r.json())
+        .then((json) => {
+          if (json.error) throw new Error(json.error);
+          setAnchorMeta(json.meta?.anchor ?? null);
+          setLooks(json.looks);
+        })
+        .catch((err) => setLoadError(err.message));
+      return;
+    }
+
+    // Normal mode: check localStorage cache first
     const cached = getCachedLooks();
     if (cached) { setLooks(cached); return; }
 
@@ -254,7 +306,7 @@ function SwipePageInner() {
         setLooks(json.looks);
       })
       .catch((err) => setLoadError(err.message));
-  }, []);
+  }, [anchorId]);
 
   const look = looks?.[currentIndex];
   const nextLook = looks?.[currentIndex + 1];
@@ -335,6 +387,11 @@ function SwipePageInner() {
   const rotation  = cardDx * 0.055;
   const stampPct  = Math.min(1, Math.max(0, (Math.abs(cardDx) - 60) / 50));
 
+  // Loading message varies by mode
+  const loadingMessage = anchorId
+    ? "David is styling around your pick…"
+    : "David is pulling your looks…";
+
   // ── render ──
 
   if (loadError) {
@@ -363,7 +420,7 @@ function SwipePageInner() {
           </button>
         </div>
         <div className="flex-1 flex items-center justify-center">
-          <LoadingSkeleton />
+          <LoadingSkeleton message={loadingMessage} />
         </div>
       </div>
     );
@@ -375,7 +432,7 @@ function SwipePageInner() {
       {/* ── header ── */}
       <div className="flex items-center shrink-0" style={{ padding: "12px 18px 8px", gap: 12 }}>
         <button
-          onClick={() => router.push("/")}
+          onClick={() => router.push(anchorId ? "/wardrobe" : "/")}
           style={{ width: 34, height: 34, borderRadius: "50%", border: "1.5px solid rgba(42,37,32,0.2)", background: "transparent", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20, color: "#2a2520", lineHeight: 1, flexShrink: 0 }}
         >
           ‹
@@ -403,6 +460,29 @@ function SwipePageInner() {
           {currentIndex + 1} of {looks.length}
         </span>
       </div>
+
+      {/* ── anchor mode banner ── */}
+      {anchorMeta && (
+        <div style={{ padding: "0 18px 6px", flexShrink: 0 }}>
+          <div style={{
+            display: "flex", alignItems: "center", gap: 8,
+            background: "rgba(196,168,130,0.12)",
+            border: "1px solid rgba(196,168,130,0.28)",
+            borderRadius: 10, padding: "6px 10px",
+          }}>
+            <span style={{ fontSize: 11, color: "#c4a882" }}>✦</span>
+            <p style={{
+              fontFamily: "var(--font-jost), sans-serif",
+              fontSize: 11, color: "#8a7a6a", lineHeight: 1.4, margin: 0,
+            }}>
+              Styled around{" "}
+              <strong style={{ color: "#2a2520", fontWeight: 600 }}>
+                {anchorMeta.name}
+              </strong>
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* ── david's note ── */}
       <div style={{ padding: "0 18px 8px", flexShrink: 0 }}>
@@ -474,6 +554,7 @@ function SwipePageInner() {
               onSwap={swapItem}
               onItemDragStart={() => { itemDraggingRef.current = true; }}
               onItemDragEnd={() => { setTimeout(() => { itemDraggingRef.current = false; }, 50); }}
+              anchorItemId={anchorMeta?.id}
             />
           </div>
 
