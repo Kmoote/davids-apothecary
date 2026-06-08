@@ -43,8 +43,10 @@ const MAX_INPUT_DIM = 1568;
 export const WARDROBE_CLEANUP_PROMPT =
   "Remove the background and place the garment on a clean, seamless white studio surface. " +
   "Smooth out any wrinkles and creases, and even out the lighting so the piece looks like a " +
-  "clean, professional catalog product photo. Keep the garment's colors, pattern, shape, and " +
-  "proportions exactly accurate — do not restyle, recolor, crop, or add any new elements. " +
+  "clean, professional catalog product photo. Orient the garment so it is upright as it would " +
+  "be worn — neckline/collar/top at the top, hem/cuffs/bottom at the bottom (for shoes, soles " +
+  "down and toes pointing forward). Keep the garment's colors, pattern, shape, and proportions " +
+  "exactly accurate — do not restyle, recolor, crop, or add any new elements. " +
   "Show only this single garment, centered on the white surface.";
 
 type GeminiPart = {
