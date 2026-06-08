@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { createClient } from "@supabase/supabase-js";
+import { processWardrobeImage } from "@/lib/nano-banana";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
@@ -61,13 +62,19 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "No photo provided" }, { status: 400 });
     }
 
-    const buffer = Buffer.from(await file.arrayBuffer());
-    const base64 = buffer.toString("base64");
+    const originalBuffer = Buffer.from(await file.arrayBuffer());
     const mediaType = (
       file.type === "image/png" ? "image/png"
       : file.type === "image/webp" ? "image/webp"
       : "image/jpeg"
     ) as "image/jpeg" | "image/png" | "image/webp";
+
+    // Phase 1 photo cleanup: remove background, place on a clean white surface,
+    // smooth wrinkles, even out lighting. Falls back to the original buffer on
+    // any failure (mediaType is preserved), so an upload never fails because the
+    // cleanup step did. The cleaned image is what gets stored AND tagged.
+    const buffer = await processWardrobeImage(originalBuffer, mediaType);
+    const base64 = buffer.toString("base64");
 
     // Upload to Supabase Storage
     const ext = file.type === "image/png" ? "png" : "jpg";
