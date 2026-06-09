@@ -10,6 +10,7 @@
  */
 
 import type { RealLookSlot, RealSlotItem } from "./looks";
+import type { FitInference } from "./fit-tagger";
 
 // ── season helper ─────────────────────────────────────────────────────────────
 
@@ -273,7 +274,8 @@ export type WardrobeRow = {
   fit_note?: string | null;
   // Phase B1b — David's automated fit reasoning, populated by the
   // fit-inference Tagger. Null until that pass runs against the item.
-  fit_inference?: Record<string, unknown> | null;
+  // Type lives in lib/fit-tagger.ts — single source of truth.
+  fit_inference?: FitInference | null;
   wear_count?: number;
   pass_count?: number;
 };

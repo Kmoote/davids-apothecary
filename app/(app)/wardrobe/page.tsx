@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase, CATHERINE_USER_ID } from "@/lib/supabase";
@@ -101,23 +101,27 @@ function EditSheet({
   const [similarReason, setSimilarReason] = useState<string | null>(null);
   const sheetRef = useRef<HTMLDivElement>(null);
 
-  // Phase B2 — fetch the 5 most-similar items when the sheet opens
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch(`/api/wardrobe/${item.id}/similar?limit=5`);
-        if (!res.ok) return;
-        const data = await res.json() as { items?: SimilarItem[]; reason?: string };
-        if (cancelled) return;
-        setSimilar(data.items ?? []);
-        setSimilarReason(data.reason ?? null);
-      } catch {
-        // silent — feature is additive
-      }
-    })();
-    return () => { cancelled = true; };
+  // Phase B2 — fetch the 5 most-similar items. Used both on sheet open and
+  // again after a re-tag (which can produce a new embedding and therefore
+  // a new similar-items set).
+  const fetchSimilar = useCallback(async (signal?: AbortSignal) => {
+    try {
+      const res = await fetch(`/api/wardrobe/${item.id}/similar?limit=5`, { signal });
+      if (!res.ok) return;
+      const data = await res.json() as { items?: SimilarItem[]; reason?: string };
+      if (signal?.aborted) return;
+      setSimilar(data.items ?? []);
+      setSimilarReason(data.reason ?? null);
+    } catch {
+      // silent — feature is additive
+    }
   }, [item.id]);
+
+  useEffect(() => {
+    const ac = new AbortController();
+    fetchSimilar(ac.signal);
+    return () => ac.abort();
+  }, [fetchSimilar]);
 
   // Prevent background scroll while sheet is open
   useEffect(() => {
@@ -181,6 +185,10 @@ function EditSheet({
       });
       // Phase B1b — refresh the in-sheet "How David Reads This Piece" card
       if (u.fit_inference) setFitInference(u.fit_inference as FitInference);
+      // Phase B2 — refresh "Items Like This" since a new embedding may now
+      // surface different neighbors (or any neighbors at all, if the item
+      // wasn't embedded before this retag).
+      fetchSimilar();
       setRetagMessage("David refreshed the tags. Review and save if you want any tweaks.");
       setTimeout(() => setRetagMessage(null), 5000);
     } catch (e) {

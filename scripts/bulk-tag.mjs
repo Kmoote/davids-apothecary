@@ -257,7 +257,10 @@ async function tagImage(base64, mediaType) {
       ],
     }],
   });
-  const text = msg.content[0].type === "text" ? msg.content[0].text : "{}";
+  // Defensive: Anthropic occasionally returns empty content arrays. Optional
+  // chaining means a single bad response returns {} (parser later flags it as
+  // "no JSON") instead of crashing the entire 92-item back-fill loop.
+  const text = msg.content[0]?.type === "text" ? msg.content[0].text : "{}";
   const match = text.match(/\{[\s\S]*\}/);
   return match ? JSON.parse(match[0]) : {};
 }
@@ -361,10 +364,8 @@ async function main() {
         embedding = await embedImage(base64);
       }
 
-      const payload = {
-        user_id:       CATHERINE_USER_ID,
-        photo_url:     publicUrl,
-        thumbnail_url: publicUrl,
+      // AI-derived fields — safe to overwrite on every pass.
+      const aiFields = {
         category:      tags.category    ?? "tops",
         subcategory:   tags.subcategory ?? null,
         colors:        Array.isArray(tags.colors) ? tags.colors : [],
@@ -373,8 +374,6 @@ async function main() {
         formality:     Number(tags.formality) || 2,
         pattern:       tags.pattern ?? null,
         fabric:        tags.fabric  ?? null,
-        name:          tags.name    ?? null,
-        brand:         tags.brand   ?? null,
         tagger_raw:    tags,
         ...(fitInference ? { fit_inference: fitInference } : {}),
         ...(embedding   ? { embedding } : {}),
@@ -382,15 +381,45 @@ async function main() {
 
       let dbErr;
       if (alreadyTagged) {
-        // update existing row by photo_url
+        // ── Retag (UPDATE) path ────────────────────────────────────────
+        // Preserve Catherine's manual edits. Same rule as
+        // app/api/wardrobe/[id]/retag/route.ts: refresh `name` only if
+        // the current value matches the previous tagger's name (i.e. she
+        // hasn't renamed it). Never touch `brand`, `size`, `fit_note`,
+        // `david_note` — those are exclusively manual.
+        const { data: existingRow } = await supabase
+          .from("wardrobe_items")
+          .select("name,tagger_raw")
+          .eq("photo_url", publicUrl)
+          .eq("user_id", CATHERINE_USER_ID)
+          .single();
+
+        const prevTaggerName = existingRow?.tagger_raw?.name ?? null;
+        const nameWasUntouched = !existingRow?.name || existingRow.name === prevTaggerName;
+
+        const updatePayload = {
+          ...aiFields,
+          ...(nameWasUntouched && tags.name ? { name: tags.name } : {}),
+        };
+
         ({ error: dbErr } = await supabase
           .from("wardrobe_items")
-          .update(payload)
+          .update(updatePayload)
           .eq("photo_url", publicUrl)
           .eq("user_id", CATHERINE_USER_ID));
         if (!dbErr) updated++;
       } else {
-        ({ error: dbErr } = await supabase.from("wardrobe_items").insert(payload));
+        // ── New item (INSERT) path ─────────────────────────────────────
+        // Use the full payload, including AI-suggested name + brand.
+        const insertPayload = {
+          user_id:       CATHERINE_USER_ID,
+          photo_url:     publicUrl,
+          thumbnail_url: publicUrl,
+          name:          tags.name  ?? null,
+          brand:         tags.brand ?? null,
+          ...aiFields,
+        };
+        ({ error: dbErr } = await supabase.from("wardrobe_items").insert(insertPayload));
         if (!dbErr) added++;
       }
 

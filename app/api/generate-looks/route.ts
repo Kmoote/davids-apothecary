@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { createClient } from "@supabase/supabase-js";
 import type { RealLook, RealSlotItem } from "@/lib/looks";
+import type { FitInference } from "@/lib/fit-tagger";
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const supabase  = createClient(
@@ -300,8 +301,9 @@ type WardrobeRow = {
   pattern: string | null; fabric: string | null;
   last_worn_at: string | null;
   fit_note: string | null;
-  // Phase B1b — David's automated fit reasoning JSON; null until tagger runs
-  fit_inference: Record<string, unknown> | null;
+  // Phase B1b — David's automated fit reasoning. Type lives in
+  // lib/fit-tagger.ts — single source of truth across the codebase.
+  fit_inference: FitInference | null;
   wear_count: number;
   pass_count: number;
 };
@@ -671,23 +673,20 @@ export async function GET(request: Request) {
     //    - fit_note (Phase A1b) is Catherine's manual flag of per-item fit problems
     //    - fit_inference_note (Phase B1b) is David's automated fit reasoning,
     //      spoken in his voice TO Catherine. The Stylist quotes or reasons over it.
-    const condensed = candidates.map((r) => {
-      const fitInference = r.fit_inference as { fit_note_for_catherine?: string } | null;
-      return {
-        id:           r.id,
-        name:         r.name ?? r.category,
-        category:     r.category,
-        subcategory:  r.subcategory,
-        colors:       r.colors,
-        occasion_tags: r.occasion_tags,
-        formality:    r.formality,
-        season_fit:   r.season_fit,
-        pattern:      r.pattern,
-        fabric:       r.fabric,
-        fit_note:     r.fit_note ?? undefined,
-        fit_inference_note: fitInference?.fit_note_for_catherine ?? undefined,
-      };
-    });
+    const condensed = candidates.map((r) => ({
+      id:           r.id,
+      name:         r.name ?? r.category,
+      category:     r.category,
+      subcategory:  r.subcategory,
+      colors:       r.colors,
+      occasion_tags: r.occasion_tags,
+      formality:    r.formality,
+      season_fit:   r.season_fit,
+      pattern:      r.pattern,
+      fabric:       r.fabric,
+      fit_note:     r.fit_note ?? undefined,
+      fit_inference_note: r.fit_inference?.fit_note_for_catherine ?? undefined,
+    }));
 
     // 5. Call Claude with the focused candidate pool + Catherine's preferences + weather
     const msg = await anthropic.messages.create({

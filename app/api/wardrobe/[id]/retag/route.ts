@@ -125,7 +125,10 @@ export async function POST(
       ],
     });
 
-    const rawText = msg.content[0].type === "text" ? msg.content[0].text : "{}";
+    // Defensive: Anthropic occasionally returns empty content arrays (refusal,
+    // safety filter, transient API quirk). Optional chaining → graceful 502
+    // instead of an unhandled TypeError that 500s with a confusing message.
+    const rawText = msg.content[0]?.type === "text" ? msg.content[0].text : "{}";
     const jsonMatch = rawText.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
       return NextResponse.json({ error: "Tagger returned no JSON" }, { status: 502 });
