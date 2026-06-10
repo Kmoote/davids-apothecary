@@ -247,8 +247,9 @@ function buildPrefSummary(prefs: UserPrefs | null): string {
 }
 
 // weatherLine format: "Current weather: 72°F, partly cloudy" (or null if unavailable)
-const buildPrompt = (items: object[], season: string, weatherLine?: string | null) =>
-  `It's ${season}.${weatherLine ? ` ${weatherLine}.` : ""} Here are Catherine's most-available pieces for today (${items.length} items — pre-filtered by season and recency):
+// vibeLine format: free-text from Catherine ("today I want to feel sharp") or null
+const buildPrompt = (items: object[], season: string, weatherLine?: string | null, vibeLine?: string | null) =>
+  `It's ${season}.${weatherLine ? ` ${weatherLine}.` : ""}${vibeLine ? ` Catherine's vibe for today: "${vibeLine}". Use this as a soft influence on mood, color confidence, and silhouette — but still respect occasion, weather, and her preferences. Don't quote the vibe in your david_note; let it show in the picks.` : ""} Here are Catherine's most-available pieces for today (${items.length} items — pre-filtered by season and recency):
 ${JSON.stringify(items)}
 
 Create 3 complete, cohesive outfit looks. Return ONLY a JSON array — no markdown, no explanation.
@@ -614,10 +615,17 @@ async function loadTodaysLooks(itemMap: Map<string, WardrobeRow>): Promise<RealL
 export async function GET(request: Request) {
   try {
     // ?refresh=1 bypasses the daily cache — used by the "None of these" regenerate flow.
+    // ?vibe=…  Phase C1 — Catherine's free-text mood prompt. Setting any non-empty
+    //          vibe also bypasses the cache (no point reusing yesterday's no-vibe set
+    //          when she wants something tuned to her current mood). The vibe is
+    //          persisted on stylist_raw.vibe so subsequent reads of the same day
+    //          reflect it.
     // New looks are still written to the DB so wear/pass decisions can be recorded,
     // and loadTodaysLooks (DESC order) will serve the freshest set on the next normal load.
     const url     = new URL(request.url);
     const refresh = url.searchParams.get("refresh") === "1";
+    const vibeRaw = url.searchParams.get("vibe");
+    const vibe    = vibeRaw && vibeRaw.trim() ? vibeRaw.trim().slice(0, 200) : null;
 
     const season = getCurrentSeason();
 
@@ -636,10 +644,10 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: "Not enough wardrobe items yet" }, { status: 422 });
     }
 
-    // 1b. CACHE CHECK — skip when ?refresh=1 (regenerate mode).
+    // 1b. CACHE CHECK — skip when ?refresh=1 (regenerate mode) or when a vibe is set.
     //     On normal loads, if today's most-recent regular set exists, return it immediately.
     const itemMap = new Map(allItems.map((r) => [r.id, r]));
-    if (!refresh) {
+    if (!refresh && !vibe) {
       const cached = await loadTodaysLooks(itemMap);
       if (cached) {
         return NextResponse.json({
@@ -693,7 +701,7 @@ export async function GET(request: Request) {
       model: "claude-haiku-4-5-20251001",
       max_tokens: 1200,
       system: systemPrompt,
-      messages: [{ role: "user", content: buildPrompt(condensed, season, weatherLine) }],
+      messages: [{ role: "user", content: buildPrompt(condensed, season, weatherLine, vibe) }],
     });
 
     const rawText = msg.content[0].type === "text" ? msg.content[0].text : "[]";
@@ -811,6 +819,7 @@ export async function GET(request: Request) {
             season,
             slot_labels:  slotLabels,
             slot_alts:    slotAlts,
+            ...(vibe ? { vibe } : {}),
           },
         })
         .select("id")
@@ -822,7 +831,7 @@ export async function GET(request: Request) {
 
     return NextResponse.json({
       looks: finalLooks,
-      meta: { season, cached: false, candidates: candidates.length, refresh },
+      meta: { season, cached: false, candidates: candidates.length, refresh, vibe },
     });
 
   } catch (err) {

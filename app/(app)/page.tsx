@@ -129,7 +129,11 @@ function SkeletonCard({ isFirst }: { isFirst: boolean }) {
 export default function MorningPage() {
   const dayLabel = useDayGreeting();
   const weather  = useHomeWeather();
-  const [looks, setLooks] = useState<RealLook[] | null>(null);
+  const [looks, setLooks]               = useState<RealLook[] | null>(null);
+  // Phase C1 — vibe-prompt for the day. Local input → triggers a fresh
+  // generation via /api/generate-looks?vibe=… (bypasses cache).
+  const [vibeInput, setVibeInput]       = useState("");
+  const [isRegenerating, setIsRegenerating] = useState(false);
 
   useEffect(() => {
     const cached = getCachedLooks();
@@ -145,6 +149,25 @@ export default function MorningPage() {
       })
       .catch(() => {/* silent fail — skeleton stays */});
   }, []);
+
+  async function handleSubmitVibe() {
+    const vibe = vibeInput.trim();
+    if (!vibe || isRegenerating) return;
+    setIsRegenerating(true);
+    setLooks(null); // show skeleton while we wait
+    try {
+      const res = await fetch(`/api/generate-looks?vibe=${encodeURIComponent(vibe)}`);
+      const json = await res.json();
+      if (!json.error && Array.isArray(json.looks)) {
+        cacheLooks(json.looks);
+        setLooks(json.looks);
+      }
+    } catch {
+      // silent — skeleton stays, user can try again
+    } finally {
+      setIsRegenerating(false);
+    }
+  }
 
   const firstLook = looks?.[0];
 
@@ -174,6 +197,58 @@ export default function MorningPage() {
           text="Good morning, Cath. Let's find your look for today."
           delay={100}
         />
+
+        {/* Phase C1 — vibe-prompt for the day */}
+        <div className="fade-up" style={{ animationDelay: "160ms" }}>
+          <p style={{
+            fontFamily: "var(--font-jost), sans-serif", fontSize: 9, color: "#8a7a6a",
+            letterSpacing: "0.1em", fontWeight: 500, textTransform: "uppercase", marginBottom: 6,
+          }}>
+            Today's Vibe
+          </p>
+          <form
+            onSubmit={(e) => { e.preventDefault(); handleSubmitVibe(); }}
+            style={{ display: "flex", gap: 8, alignItems: "stretch" }}
+          >
+            <input
+              type="text"
+              value={vibeInput}
+              onChange={(e) => setVibeInput(e.target.value)}
+              disabled={isRegenerating}
+              placeholder="Today I want to feel…"
+              maxLength={200}
+              style={{
+                flex: 1,
+                fontFamily: "var(--font-jost), sans-serif", fontSize: 13,
+                color: "#2a2520", background: "#f5f0e8",
+                border: "1px solid rgba(42,37,32,0.14)", borderRadius: 12,
+                padding: "10px 14px", outline: "none", lineHeight: 1.4,
+              }}
+            />
+            <button
+              type="submit"
+              disabled={!vibeInput.trim() || isRegenerating}
+              style={{
+                fontFamily: "var(--font-jost), sans-serif", fontSize: 12, fontWeight: 600,
+                color: vibeInput.trim() && !isRegenerating ? "#faf7f2" : "#8a7a6a",
+                background: vibeInput.trim() && !isRegenerating ? "#2a2520" : "rgba(42,37,32,0.10)",
+                border: "none", borderRadius: 12,
+                padding: "0 16px",
+                cursor: vibeInput.trim() && !isRegenerating ? "pointer" : "not-allowed",
+                letterSpacing: "0.02em",
+                transition: "background 0.15s",
+              }}
+            >
+              {isRegenerating ? "…" : "Set"}
+            </button>
+          </form>
+          <p style={{
+            fontFamily: "var(--font-jost), sans-serif", fontSize: 10,
+            color: "#a89484", lineHeight: 1.4, marginTop: 6,
+          }}>
+            One short phrase. David will fold it into today's picks.
+          </p>
+        </div>
 
         {/* look carousel */}
         <div>

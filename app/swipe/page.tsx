@@ -266,6 +266,10 @@ function SwipePageInner() {
   // True while the "None of these" regenerate fetch is in flight
   const [isRegenerating, setIsRegenerating] = useState(false);
 
+  // Phase C1 — set of look_ids that Catherine has currently saved.
+  // Populated once on mount; updated optimistically on heart-tap.
+  const [savedLookIds, setSavedLookIds] = useState<Set<string>>(new Set());
+
   const [cardDx, setCardDx] = useState(0);
   const [isDraggingCard, setIsDraggingCard] = useState(false);
   const [cardExiting, setCardExiting] = useState<Decision | null>(null);
@@ -313,6 +317,54 @@ function SwipePageInner() {
 
   const look = looks?.[currentIndex];
   const nextLook = looks?.[currentIndex + 1];
+
+  // Phase C1 — fetch which of Catherine's looks are currently saved.
+  // Cheap (one query, returns ids only), fires after we have looks so we know
+  // what to highlight.
+  useEffect(() => {
+    if (!looks || looks.length === 0) return;
+    fetch("/api/saved-looks")
+      .then((r) => r.json())
+      .then((json: { saved?: Array<{ look?: { look_id?: string } | null }> }) => {
+        const ids = new Set(
+          (json.saved ?? [])
+            .map((s) => s.look?.look_id)
+            .filter((id): id is string => Boolean(id))
+        );
+        setSavedLookIds(ids);
+      })
+      .catch(() => {/* silent — heart will just stay unsaved */});
+  }, [looks]);
+
+  /** Toggle save/unsave for a look. Optimistic UI; reverts on error. */
+  const toggleSave = useCallback(async (lookId: string) => {
+    if (!lookId) return;
+    const wasSaved = savedLookIds.has(lookId);
+    // Optimistic: flip local state immediately
+    setSavedLookIds((prev) => {
+      const next = new Set(prev);
+      if (wasSaved) next.delete(lookId); else next.add(lookId);
+      return next;
+    });
+    try {
+      if (wasSaved) {
+        await fetch(`/api/saved-looks?look_id=${encodeURIComponent(lookId)}`, { method: "DELETE" });
+      } else {
+        await fetch("/api/saved-looks", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ look_id: lookId }),
+        });
+      }
+    } catch {
+      // Revert on network error
+      setSavedLookIds((prev) => {
+        const next = new Set(prev);
+        if (wasSaved) next.add(lookId); else next.delete(lookId);
+        return next;
+      });
+    }
+  }, [savedLookIds]);
 
   const commitLook = useCallback(
     async (decision: Decision) => {
@@ -594,14 +646,41 @@ function SwipePageInner() {
             />
           </div>
 
-          {/* look name strip */}
-          <div style={{ padding: "10px 16px 14px", borderTop: "1px solid rgba(42,37,32,0.10)", flexShrink: 0 }}>
-            <p style={{ fontFamily: "var(--font-jost), sans-serif", fontSize: 9.5, color: "#c4a882", fontWeight: 600, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 3 }}>
-              {look.tag}
-            </p>
-            <p style={{ fontFamily: "var(--font-playfair), serif", fontStyle: "italic", fontWeight: 700, fontSize: 22, color: "#2a2520" }}>
-              {look.name}
-            </p>
+          {/* look name strip — Phase C1 adds heart on the right */}
+          <div style={{ padding: "10px 16px 14px", borderTop: "1px solid rgba(42,37,32,0.10)", flexShrink: 0, display: "flex", alignItems: "center", gap: 12 }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <p style={{ fontFamily: "var(--font-jost), sans-serif", fontSize: 9.5, color: "#c4a882", fontWeight: 600, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 3 }}>
+                {look.tag}
+              </p>
+              <p style={{ fontFamily: "var(--font-playfair), serif", fontStyle: "italic", fontWeight: 700, fontSize: 22, color: "#2a2520" }}>
+                {look.name}
+              </p>
+            </div>
+            {look.look_id && (() => {
+              const isSaved = savedLookIds.has(look.look_id);
+              return (
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); if (look.look_id) toggleSave(look.look_id); }}
+                  aria-label={isSaved ? "Remove from saved" : "Save this look"}
+                  style={{
+                    flexShrink: 0,
+                    width: 40, height: 40,
+                    borderRadius: 20,
+                    border: `1px solid ${isSaved ? "#c94060" : "rgba(42,37,32,0.18)"}`,
+                    background: isSaved ? "rgba(201,64,96,0.10)" : "transparent",
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    cursor: "pointer",
+                    transition: "background 0.15s, border-color 0.15s",
+                    padding: 0,
+                  }}
+                >
+                  <span style={{ fontSize: 18, lineHeight: 1, color: isSaved ? "#c94060" : "#8a7a6a" }}>
+                    {isSaved ? "♥" : "♡"}
+                  </span>
+                </button>
+              );
+            })()}
           </div>
 
           {/* PASS stamp */}

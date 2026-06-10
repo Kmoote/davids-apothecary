@@ -6,7 +6,9 @@ import { usePathname } from "next/navigation";
 const tabs = [
   { label: "Home",     icon: "⌂", href: "/" },
   { label: "Wardrobe", icon: "⊞", href: "/wardrobe" },
-  { label: "Inspo",    icon: "✂", href: "/inspo" },
+  // Phase C1 — Saved replaces the Inspo stub. Inspo's "Coming in v2." page is
+  // still reachable at /inspo for now, just not nav-pinned.
+  { label: "Saved",    icon: "♡", href: "/saved" },
   { label: "Profile",  icon: "◯", href: "/profile" },
 ];
 
