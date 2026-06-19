@@ -1,0 +1,12 @@
+*.mjs    text
+*.ts     text
+*.tsx    text
+*.js     text
+*.jsx    text
+*.json   text
+*.md     text
+*.sql    text
+*.yml    text
+*.yaml   text
+*.toml   text
+*.css    text
